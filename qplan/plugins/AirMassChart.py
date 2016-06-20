@@ -90,7 +90,6 @@ class AirMassChart(PlBase.Plugin):
 
         targets = []
         site = sdlr.site
-        site.set_date(start_time)
 
         for slot in schedule.slots:
             ob = slot.ob
@@ -105,7 +104,7 @@ class AirMassChart(PlBase.Plugin):
         lengths = []
         if num_tgts > 0:
             for tgt in targets:
-                info_list = site.get_target_info(tgt)
+                info_list = get_target_info(site,tgt,(schedule.start_time+schedule.stop_time)/2.0)
                 target_data.append(Bunch.Bunch(history=info_list, target=tgt))
                 lengths.append(len(info_list))
 
@@ -125,6 +124,46 @@ class AirMassChart(PlBase.Plugin):
     def clear_schedule_cb(self, qscheduler):
         #self.view.gui_do(self.plot.clear)
         self.logger.info("cleared plot")
+
+
+def get_target_info(site, target, date,
+                    time_interval=5):
+    """Compute various values for a target from sunrise to sunset"""
+
+    def _round_time(dtime):
+        # Sets time to nice rounded value
+        y, m ,d, hh, mm, ss = dtime.tuple()
+        mm = mm - (mm % 5)
+        return ephem.Date(datetime(y, m , d, hh, mm, 5, 0))
+
+    def _set_data_range(sunset, sunrise, tint):
+        # Returns numpy array of dates ranging from 15 minutes before sunset
+        # to 15 minutes after sunrise
+        ss = _round_time(ephem.Date(sunset - 15*ephem.minute))
+        sr = _round_time(ephem.Date(sunrise + 15*ephem.minute))
+        return numpy.arange(ss, sr, tint)
+
+    # default for start time is sunset on the current date
+    time_start = site.sun_set_time(date, u'previous')
+    # default for stop time is sunrise on the current date
+    time_stop = site.sun_rise_time(date, u'next')
+
+    t_range = _set_data_range(time_start, time_stop,
+                                  time_interval*ephem.minute)
+    #print('computing airmass history...')
+    history = []
+
+    # TODO: this should probably return a generator
+    for ut in t_range:
+        # ugh
+        tup = ephem.Date(ut).tuple()
+        args = tup[:-1] + (int(tup[-1]),)
+        ut_with_tz = datetime(*args,
+                                  tzinfo=self.tz_utc)
+        info = target.calc(self, ut_with_tz)
+        history.append(info)
+    #print(('computed airmass history', self.history))
+    return history
 
 
 #END

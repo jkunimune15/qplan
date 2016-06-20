@@ -6,18 +6,18 @@
 #
 import os
 import time
-from datetime import timedelta
+from datetime import timedelta, datetime
 import pytz
 import numpy
 import StringIO
 
 # 3rd party imports
 from ginga.misc import Callback, Bunch
+import astroplan
 
 # local imports
 import misc
 import entity
-import common
 import qsim
 
 # maximum rank for a program
@@ -34,11 +34,8 @@ class Scheduler(Callback.Callbacks):
 
         self.logger = logger
 
-        self.site = common.subaru
-        # TODO: encapsulate this
-        HST = entity.HST()
-        #self.timezone = pytz.timezone('US/Hawaii')
-        self.timezone = HST
+        self.site = astroplan.Observer.at_site('Subaru', timezone='US/Hawaii')
+	self.timezone = self.site.timezone
 
         # these are the main data structures used to schedule
         self.oblist = []
@@ -318,14 +315,14 @@ class Scheduler(Callback.Callbacks):
         t_t1 = time.time()
 
         for rec in self.schedule_recs:
-            night_start = site.get_date("%s %s" % (rec.date, rec.starttime))
+            night_start = self.get_date("%s %s" % (rec.date, rec.starttime))
             next_day = night_start + timedelta(0, 3600*14)
             next_day_s = next_day.strftime("%Y-%m-%d")
             # Assume that stoptime is on the next day, but revert to same
             # day if resulting end time is less than the start time
-            night_stop = site.get_date("%s %s" % (rec.date, rec.stoptime))
+            night_stop = self.get_date("%s %s" % (rec.date, rec.stoptime))
             if night_stop < night_start:
-                night_stop = site.get_date("%s %s" % (next_day_s, rec.stoptime))
+                night_stop = self.get_date("%s %s" % (next_day_s, rec.stoptime))
 
             # associate available filters and other items with this schedule
             schedules.append(entity.Schedule(night_start, night_stop,
@@ -500,5 +497,24 @@ class Scheduler(Callback.Callbacks):
     def select_schedule(self, schedule):
         self.selected_schedule = schedule
         self.make_callback('schedule-selected', schedule)
+
+
+    def get_date(self, date_str, timezone=None):
+        if timezone == None:
+            timezone = self.timezone
+
+        formats = ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d %H',
+                   '%Y-%m-%d']
+        for fmt in formats:
+            try:
+                date = datetime.strptime(date_str, fmt)
+                # Localize to the requested timezone
+                date = timezone.localize(date)
+                return date
+
+            except ValueError as e:
+                continue
+
+        raise e
 
 # END

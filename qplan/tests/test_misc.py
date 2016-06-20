@@ -35,12 +35,12 @@ class TestEntity01(unittest.TestCase):
         self.assert_(time1 < time2)
     
     def test_get_body(self):
-        tgt = entity.StaticTarget("vega", vega[0], vega[1])
+        tgt = entity.FixedTarget(name="vega", coord=SkyCoord(vega[0],vega[1],frame="icrs"))
         self.assert_(isinstance(tgt.body, ephem.Body))
     
     def test_observable_1(self):
         # vega should be visible during this period
-        tgt = entity.StaticTarget("vega", vega[0], vega[1])
+        tgt = entity.FixedTarget(name="vega", coord=SkyCoord(vega[0],vega[1],frame="icrs"))
         time1 = self.obs.get_date("2014-04-29 04:00")
         time2 = self.obs.get_date("2014-04-29 05:00")
         is_obs, time = self.obs.observable(tgt, time1, time2, 15.0, 85.0,
@@ -50,7 +50,7 @@ class TestEntity01(unittest.TestCase):
     def test_observable_2(self):
         # vega should be visible near the end but not in the beginning
         # during this period (rising)
-        tgt = entity.StaticTarget("vega", vega[0], vega[1])
+        tgt = entity.FixedTarget(name="vega", coord=SkyCoord(vega[0],vega[1],frame="icrs"))
         time1 = self.obs.get_date("2014-04-28 22:00")
         time2 = self.obs.get_date("2014-04-28 23:00")
         is_obs, time = self.obs.observable(tgt, time1, time2, 15.0, 85.0,
@@ -60,7 +60,7 @@ class TestEntity01(unittest.TestCase):
     def test_observable_3(self):
         # vega should be visible near the end but not in the beginning
         # during this period (rising)
-        tgt = entity.StaticTarget("vega", vega[0], vega[1])
+        tgt = entity.FixedTarget(name="vega", coord=SkyCoord(vega[0],vega[1],frame="icrs"))
         time1 = self.obs.get_date("2014-04-28 22:00")
         time2 = self.obs.get_date("2014-04-28 23:00")
         is_obs, time = self.obs.observable(tgt, time1, time2, 15.0, 85.0,
@@ -70,7 +70,7 @@ class TestEntity01(unittest.TestCase):
     def test_observable_4(self):
         # vega should be visible near the beginning but not near the end
         # during this period (setting)
-        tgt = entity.StaticTarget("vega", vega[0], vega[1])
+        tgt = entity.FixedTarget(name="vega", coord=SkyCoord(vega[0],vega[1],frame="icrs"))
         time1 = self.obs.get_date("2014-04-29 10:00")
         time2 = self.obs.get_date("2014-04-29 11:00")
         is_obs, time = self.obs.observable(tgt, time1, time2, 15.0, 85.0,
@@ -80,7 +80,7 @@ class TestEntity01(unittest.TestCase):
     def test_observable_5(self):
         # vega should be visible near the beginning but not near the end
         # during this period (setting)
-        tgt = entity.StaticTarget("vega", vega[0], vega[1])
+        tgt = entity.FixedTarget(name="vega", coord=SkyCoord(vega[0],vega[1],frame="icrs"))
         time1 = self.obs.get_date("2014-04-29 10:00")
         time2 = self.obs.get_date("2014-04-29 11:00")
         is_obs, time = self.obs.observable(tgt, time1, time2, 15.0, 85.0,
@@ -90,7 +90,7 @@ class TestEntity01(unittest.TestCase):
     def test_observable_6(self):
         # vega should be visible near the beginning but not near the end
         # during this period (setting)
-        tgt = entity.StaticTarget("vega", vega[0], vega[1])
+        tgt = entity.FixedTarget(name="vega", coord=SkyCoord(vega[0],vega[1],frame="icrs"))
         time1 = self.obs.get_date("2014-04-29 11:00")
         time2 = self.obs.get_date("2014-04-29 12:00")
         is_obs, time = self.obs.observable(tgt, time1, time2, 15.0, 85.0,
@@ -111,16 +111,16 @@ class TestEntity01(unittest.TestCase):
         amass = tup[4]
 
         # now calculate via misc
-        body = entity.StaticTarget('ACTJ0022-0036',
-                                   '00:22:13.44', '-00:36:25.20')
+        body = entity.FixedTarget(name='ACTJ0022-0036',
+                                  coord=SkyCoord('00:22:13.44', '-00:36:25.20', frame='icrs'))
         time1 = self.obs.get_date("2010-10-18 22:00")
         c1 = self.obs.calc(body, time1)
         self.assert_(math.fabs(amass - c1.airmass) < 0.01)
     
     def test_airmass2(self):
         # now calculate via misc
-        body = entity.StaticTarget('ACTJ0022-0036',
-                                   '00:22:13.44', '-00:36:25.20')
+        body = entity.FixedTarget(name='ACTJ0022-0036',
+                                   coord=SkyCoord('00:22:13.44', '-00:36:25.20', frame='icrs'))
         time1 = self.obs.get_date("2010-10-18 21:00")
         c1 = self.obs.calc(body, time1)
         self.assert_(c1.airmass > 1.2)
@@ -146,8 +146,8 @@ class TestEntity01(unittest.TestCase):
         self.assert_(res[0].stop_time == time2)
     
     def test_distance_1(self):
-        tgt1 = entity.StaticTarget("vega", vega[0], vega[1])
-        tgt2 = entity.StaticTarget("altair", altair[0], altair[1])
+        tgt1 = entity.FixedTarget(name="vega", coord=SkyCoord(vega[0], vega[1], frame='icrs'))
+        tgt2 = entity.FixedTarget(name="altair", coord=SkyCoord(altair[0], altair[1], frame='icrs')
         time1 = self.obs.get_date("2010-10-18 22:00")
         d_alt, d_az = self.obs.distance(tgt1, tgt2, time1)
         self.assertEquals(int(math.fabs(d_alt)), 11)
