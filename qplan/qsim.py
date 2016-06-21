@@ -36,9 +36,6 @@ dark_night_moon_pct_limit = 0.25
 
 
 def filterchange_ob(ob, total_time):
-    """
-    copies ob and adds a filter change comment
-    """
     new_ob = entity.OB(program=ob.program, target=ob.target,
                        telcfg=ob.telcfg,
                        inscfg=ob.inscfg, envcfg=ob.envcfg,
@@ -48,10 +45,12 @@ def filterchange_ob(ob, total_time):
 
 
 def longslew_ob(prev_ob, ob, total_time):
-    """
-    Copies ob with a Long slew comment and a time of total_time. Also removes the filter of the inscfg if prev_ob is None
-    """
-    inscfg = ob.inscfg
+    if prev_ob == None:
+        klass = ob.inscfg.__class__
+        inscfg = klass(filter=None)
+    else:
+        #inscfg = prev_ob.inscfg
+        inscfg = ob.inscfg
     new_ob = entity.OB(program=ob.program, target=ob.target,
                        telcfg=ob.telcfg,
                        inscfg=inscfg, envcfg=ob.envcfg,
@@ -61,9 +60,6 @@ def longslew_ob(prev_ob, ob, total_time):
 
 
 def calibration_ob(ob, sdss_target, total_time):
-    """
-    Copies ob with a target of sdss_target, a time of total_time, and a comment about SDSS.
-    """
     new_ob = entity.OB(program=ob.program, target=sdss_target,
                        telcfg=ob.telcfg,
                        inscfg=ob.inscfg, envcfg=ob.envcfg,
@@ -73,9 +69,6 @@ def calibration_ob(ob, sdss_target, total_time):
 
 
 def delay_ob(ob, total_time):
-    """
-    Copies ob with a total time of total_time
-    """
     new_ob = entity.OB(program=ob.program, target=ob.target,
                        telcfg=ob.telcfg,
                        inscfg=ob.inscfg, envcfg=ob.envcfg,
@@ -85,9 +78,6 @@ def delay_ob(ob, total_time):
 
 
 def setup_ob(ob, total_time):
-    """
-    Copies ob with a time of total_time and a comment about setting up
-    """
     d = dict(obid=str(ob), obname=ob.name,
              comment=ob.comment,    # root OB's comment
              proposal=ob.program.proposal)
@@ -98,13 +88,12 @@ def setup_ob(ob, total_time):
                        inscfg=ob.inscfg, envcfg=ob.envcfg,
                        total_time=total_time, derived=True,
                        comment="Setup OB: %s" % (comment))
+    #
+    new_ob.orig_ob = ob
     return new_ob
 
 
 def obs_to_slots(logger, slots, site, obs, check_moon=False, check_env=False):
-    """
-    returns a dictionary where each slot has a list of obs that fit into it
-    """
     obmap = {}
     for slot in slots:
         key = str(slot)
@@ -124,9 +113,7 @@ def obs_to_slots(logger, slots, site, obs, check_moon=False, check_env=False):
     return obmap
 
 def calc_slew_time(cur_alt_deg, cur_az_deg, to_alt_deg, to_az_deg):
-    """
-    calculates the slew time between two sets of coordinates
-    """
+
     delta_alt, delta_az = to_alt_deg - cur_alt_deg, to_az_deg - cur_az_deg
 
     slew_sec = misc.calc_slew_time(delta_az, delta_alt)
@@ -134,9 +121,7 @@ def calc_slew_time(cur_alt_deg, cur_az_deg, to_alt_deg, to_az_deg):
 
 
 def check_schedule_invariant(site, schedule, ob):
-    """
-    returns a Bunch answering the question, Can this ob fit into this schedule at this site?
-    """
+
     res = Bunch.Bunch(ob=ob, obs_ok=False, reason="No good reason!")
 
     # check if instrument will be installed
@@ -163,11 +148,11 @@ def check_schedule_invariant(site, schedule, ob):
 
 
 def check_night_visibility(site, schedule, ob):
-    """
-    returns a bunch representing the answer to,
-    Will this ob be visible during this schedule at this site, and when?
-    """
+
     res = Bunch.Bunch(ob=ob, obs_ok=False, reason="No good reason!")
+
+    # Check visibility of target
+    c1 = ob.target.calc(site, schedule.start_time)
 
     min_el, max_el = ob.telcfg.get_el_minmax()
 
@@ -178,8 +163,11 @@ def check_night_visibility(site, schedule, ob):
                                                 min_el, max_el, ob.total_time,
                                                 airmass=ob.envcfg.airmass,
                                                 moon_sep=ob.envcfg.moon_sep)
+
     if not obs_ok:
-        res.setvals(reason="Time or visibility of target")
+        res.setvals(obs_ok=False,
+                    reason="Time or visibility of target")
+        return res
 
     res.setvals(obs_ok=obs_ok, start_time=t_start, stop_time=t_stop)
     return res
@@ -209,12 +197,18 @@ def check_moon_cond(site, start_time, stop_time, ob, res):
         ## print "moon pct=%f moon alt=%f moon_sep=%f" % (
         ##     c1.moon_pct, c1.moon_alt, c1.moon_sep)
         if not is_dark_night:
+            res.setvals(obs_ok=False,
+                        reason="Moon illumination=%f not acceptable (alt 1=%.2f 2=%.2f" % (
+                c1.moon_pct, c1.moon_alt, c2.moon_alt))
             return False
 
     # override the observer's desired separation if it is a dark night
     limit_sep = min(30.0, desired_moon_sep)
     if (desired_moon_sep is not None) and is_dark_night:
         desired_moon_sep = min(desired_moon_sep, limit_sep)
+        if desired_moon_sep < ob.envcfg.moon_sep:
+            res.setvals(override="overrode moon separation (%.2f) -> %.2f deg" % (
+                ob.envcfg.moon_sep, desired_moon_sep))
 
     # if observer specified a moon separation from target, check it now
     # TODO: do we need to check this at the end of the exposure as well?
@@ -222,6 +216,9 @@ def check_moon_cond(site, start_time, stop_time, ob, res):
     if desired_moon_sep is not None:
         if ((c1.moon_sep < desired_moon_sep) or
             (c2.moon_sep < desired_moon_sep)):
+            res.setvals(obs_ok=False,
+                        reason="Moon-target separation (%f,%f < %f) not acceptable" % (
+                c1.moon_sep, c2.moon_sep, desired_moon_sep))
             return False
 
     # moon looks good!
@@ -229,9 +226,7 @@ def check_moon_cond(site, start_time, stop_time, ob, res):
 
 
 def check_slot(site, prev_slot, slot, ob, check_moon=True, check_env=True):
-    """
-    returns a Bunch saying whether ob will fit into slot
-    """
+
     res = Bunch.Bunch(ob=ob, obs_ok=False, reason="No good reason!")
 
     # Check whether OB will fit in this slot
@@ -424,9 +419,7 @@ def check_slot(site, prev_slot, slot, ob, check_moon=True, check_env=True):
 
 
 def eval_schedule(schedule):
-    """
-    Calculates the number of filter exchanges and the time wasted in schedule
-    """
+
     current_filter = None
     num_filter_exchanges = 0
     time_waste_sec = 0.0

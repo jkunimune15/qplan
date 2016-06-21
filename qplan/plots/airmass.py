@@ -299,7 +299,7 @@ class AirMassPlot(plots.Plot):
 
 if __name__ == '__main__':
     import sys
-    import astroplan, common
+    import entity, common
 
     from ginga import toolkit
     toolkit.use('qt')
@@ -337,13 +337,13 @@ if __name__ == '__main__':
 
     targets = []
     site.set_date(t)
-    tgt = astroplan.FixedTarget(name='S5', coord=SkyCoord('14:20:00.00', '48:00:00.00', frame='icrs'))
+    tgt = entity.StaticTarget(name='S5', ra='14:20:00.00', dec='48:00:00.00')
     targets.append(tgt)
-    tgt = astroplan.FixedTarget(name='Sf', coord=SkyCoord('09:40:00.00', '43:00:00.00', frame='icrs'))
+    tgt = entity.StaticTarget(name='Sf', ra='09:40:00.00', dec='43:00:00.00')
     targets.append(tgt)
-    tgt = astroplan.FixedTarget(name='Sm', coord=SkyCoord('10:30:00.00', '36:00:00.00', frame='icrs'))
+    tgt = entity.StaticTarget(name='Sm', ra='10:30:00.00', dec='36:00:00.00')
     targets.append(tgt)
-    tgt = astroplan.FixedTarget(name='Sn', coord=SkyCoord('15:10:00.00', '34:00:00.00', frame='icrs'))
+    tgt = entity.StaticTarget(name='Sn', ra='15:10:00.00', dec='34:00:00.00')
     targets.append(tgt)
 
     # make airmass plot

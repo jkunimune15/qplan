@@ -176,7 +176,7 @@ class ControlPanel(PlBase.Plugin):
                 #self.oblist_info.extend(self.oblist[propname].obs_info)
                 self.model.set_ob_qf_dict(self.ob_qf_dict)
 
-        except ArithmeticDivideByZeroError as e:
+        except Exception as e:
             self.logger.error("Error initializing: %s" % (str(e)))
 
 

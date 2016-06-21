@@ -152,8 +152,10 @@ if __name__ == '__main__':
     topw.show()
 
     plot.plot_azel([(-210.0, 60.43, "telescope"),])
-    tgt3 = FixedTarget(name="Bootes", coord=SkyCoord("14:31:45.40","+32:28:38.50"), frame="icrs")
-    site = Observer.at_site('subaru')
+    tgt3 = entity.StaticTarget(name="Bootes", ra="14:31:45.40",
+                               dec="+32:28:38.50")
+    tz = pytz.timezone('US/Hawaii')
+    site = common.subaru
 
     start_time = datetime.strptime("2015-03-27 20:05:00",
                                    "%Y-%m-%d %H:%M:%S")

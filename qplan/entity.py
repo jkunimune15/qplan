@@ -11,7 +11,6 @@ import pytz
 # 3rd party imports
 import ephem
 import numpy
-import astroplan
 # ZOPE imports
 try:
     import persistent
@@ -283,8 +282,6 @@ class OB(PersistentEntity):
     def __init__(self, id=None, program=None, target=None, telcfg=None,
                  inscfg=None, envcfg=None, total_time=None, acct_time=None,
                  priority=1.0, name=None, derived=None, comment=''):
-	if target != None and type(target).__name__ != FixedTarget:
-	    raise TypeError("I thought I replaced all those StaticTargets with FixedTargets!")
         super(OB, self).__init__()
         if id is None:
             id = "ob%04d" % (OB.count)
@@ -392,15 +389,63 @@ class Observer(object):
     """
     Observer
     """
-    def __init__(self, name, date=None):
+    def __init__(self, name, timezone=None, longitude=None, latitude=None,
+                 elevation=None, pressure=None, temperature=None,
+                 date=None, description=None):
         super(Observer, self).__init__()
+        self.name = name
+        self.timezone = timezone
+        self.longitude = longitude
+        self.latitude = latitude
+        self.elevation = elevation
+        self.pressure = pressure
+        self.temperature = temperature
         self.date = date
-        self.site = astroplan.Observer.at_site("Subaru", timezone="US/Hawaii")
+        self.horizon = -1 * numpy.sqrt(2 * elevation / ephem.earth_radius)
+
+        #self.tz_local = pytz.timezone(self.timezone)
+        self.tz_local = timezone
+        self.tz_utc = pytz.timezone('UTC')
+        self.site = self.get_site(date=date)
+
+        # used for sunset, sunrise calculations
+        self.horizon12 = -1.0*ephem.degrees('12:00:00.0')
+        self.horizon18 = -1.0*ephem.degrees('18:00:00.0')
+        self.sun = ephem.Sun()
+        self.moon = ephem.Moon()
+        self.sun.compute(self.site)
+        self.moon.compute(self.site)
+
+    def get_site(self, date=None, horizon_deg=None):
+        site = ephem.Observer()
+        site.lon = self.longitude
+        site.lat = self.latitude
+        site.elevation = self.elevation
+        site.pressure = self.pressure
+        site.temp = self.temperature
+        if horizon_deg != None:
+            site.horizon = math.radians(horizon_deg)
+        else:
+            site.horizon = self.horizon
+        site.epoch = 2000.0
+        if date == None:
+            date = datetime.now()
+            date.replace(tzinfo=self.tz_utc)
+        site.date = ephem.Date(date)
+        return site
+
+    def set_date(self, date):
+        try:
+            date = date.astimezone(self.tz_utc)
+        except Exception:
+            date = self.tz_utc.localize(date)
+        self.date = date
+        self.site.date = ephem.Date(date)
 
     def calc(self, body, time_start):
         return body.calc(self, time_start)
 
-    def get_date(self, date_str, timezone=None):# convert String date_str to a datetime object
+    def get_date(self, date_str, timezone=None):
         if timezone == None:
             timezone = self.tz_local
 
@@ -417,6 +462,18 @@ class Observer(object):
                 continue
 
         raise e
+
+    ## def _observable(self, target, time_start, time_stop,
+    ##                el_min_deg, el_max_deg,
+    ##                airmass=None):
+    ##     c1 = self.calc(target, time_start)
+    ##     c2 = self.calc(target, time_stop)
+
+    ##     return ((el_min_deg <= c1.alt_deg <= el_max_deg) and
+    ##             (el_min_deg <= c2.alt_deg <= el_max_deg)
+    ##             and
+    ##             ((airmass == None) or ((c1.airmass <= airmass) and
+    ##                                    (c2.airmass <= airmass))))
 
     def observable(self, target, time_start, time_stop,
                    el_min_deg, el_max_deg, time_needed,
@@ -436,23 +493,30 @@ class Observer(object):
         else:
             min_alt_deg = el_min_deg
 
+        site = self.get_site(date=time_start, horizon_deg=min_alt_deg)
+
         d1 = self.calc(target, time_start)
 
         # TODO: worry about el_max_deg
 
-        if site.altaz(time_start,target).alt >= min_alt_deg:
+        # important: pyephem only deals with UTC!!
+        time_start_utc = ephem.Date(time_start.astimezone(self.tz_utc))
+        time_stop_utc = ephem.Date(time_stop.astimezone(self.tz_utc))
+        #print "period (UT): %s to %s" % (time_start_utc, time_stop_utc)
+
+        if d1.alt_deg >= min_alt_deg:
             # body is above desired altitude at start of period
             # so calculate next setting
-            time_rise = time_start
-            time_set = site.target_set_time(time_start, target, 'next') # TODO: Why are we calculating setting; shouldn't it be when it next goes under min_alt?
+            time_rise = time_start_utc
+            time_set = site.next_setting(target.body, start=time_start_utc)
             #print "body already up: set=%s" % (time_set)
 
         else:
             # body is below desired altitude at start of period
             try:
-                time_rise = site.target_rise_time(time_start, target, 'next')
-                time_set = site.next_setting(time_start, target, 'next')
-            except TargetAlwaysUpWarning:
+                time_rise = site.next_rising(target.body, start=time_start_utc)
+                time_set = site.next_setting(target.body, start=time_start_utc)
+            except ephem.NeverUpError:
                 return (False, None, None)
 
             #print "body not up: rise=%s set=%s" % (time_rise, time_set)
@@ -466,9 +530,17 @@ class Observer(object):
             ##     #time_rise = site.previous_rising(target.body, start=time_stop_utc)
             ##     pass
 
+        if time_rise < time_start_utc:
+            diff = time_rise - time_start_utc
+            ## raise AssertionError("time rise (%s) < time start (%s)" % (
+            ##         time_rise, time_start))
+            print ("WARNING: time rise (%s) < time start (%s)" % (
+                    time_rise, time_start))
+            time_rise = time_start_utc
+
         # last observable time is setting or end of period,
         # whichever comes first
-        time_end = min(time_set, time_stop)
+        time_end = min(time_set, time_stop_utc)
         # calculate duration in seconds (subtracting two pyephem Date
         # objects seems to give a fraction in days)
         duration = (time_end - time_rise) * 86400.0
@@ -481,6 +553,7 @@ class Observer(object):
         #    can_obs, duration, time_needed, diff)
 
         # convert time_rise back to a datetime
+        time_rise = self.tz_utc.localize(time_rise.datetime())
         return (can_obs, time_rise, time_end)
 
     def distance(self, tgt1, tgt2, time_start):
@@ -629,7 +702,46 @@ class Observer(object):
         text += '18d: %s\n12d: %s\nSunrise: %s\n' % (rst[3], rst[4], rst[5])
         return text
 
-    
+    def get_target_info(self, target, time_start=None, time_stop=None,
+                        time_interval=5):
+        """Compute various values for a target from sunrise to sunset"""
+
+        def _set_time(dtime):
+            # Sets time to nice rounded value
+            y, m ,d, hh, mm, ss = dtime.tuple()
+            mm = mm - (mm % 5)
+            return ephem.Date(datetime(y, m , d, hh, mm, 5, 0))
+
+        def _set_data_range(sunset, sunrise, tint):
+            # Returns numpy array of dates 15 minutes before sunset
+            # and after sunrise
+            ss = _set_time(ephem.Date(sunset - 15*ephem.minute))
+            sr = _set_time(ephem.Date(sunrise + 15*ephem.minute))
+            return numpy.arange(ss, sr, tint)
+
+        if time_start == None:
+            # default for start time is sunset on the current date
+            time_start = self.sunset()
+        if time_stop == None:
+            # default for stop time is sunrise on the current date
+            time_stop = self.sunrise(date=time_start)
+
+        t_range = _set_data_range(time_start, time_stop,
+                                  time_interval*ephem.minute)
+        #print('computing airmass history...')
+        history = []
+
+        # TODO: this should probably return a generator
+        for ut in t_range:
+            # ugh
+            tup = ephem.Date(ut).tuple()
+            args = tup[:-1] + (int(tup[-1]),)
+            ut_with_tz = datetime(*args,
+                                  tzinfo=self.tz_utc)
+            info = target.calc(self, ut_with_tz)
+            history.append(info)
+        #print(('computed airmass history', self.history))
+        return history
 
     def get_target_info_table(self, target, time_start=None, time_stop=None):
         """Prints a table of hourly airmass data"""
@@ -882,11 +994,15 @@ class CalculationResult(object):
     def __init__(self, target, observer, date):
         # TODO: make a COPY of observer.site
         self.observer = observer
-        self.site = observer
-        self.body = target
+        self.site = observer.site
+        self.body = target.body
         self.date = date
 
         # Can/should this calculation be postponed?
+        observer.set_date(date)
+        self.body.compute(self.site)
+
+        self.lt = self.date.astimezone(observer.tz_local)
         self.ra = self.body.ra
         self.dec = self.body.dec
         self.alt = float(self.body.alt)
@@ -1010,7 +1126,11 @@ class CalculationResult(object):
 
     def calc_airmass(self, alt):
         """Compute airmass"""
-	return site.body.altaz(self.date, self.target).secz
+        if alt < ephem.degrees('03:00:00'):
+            alt = ephem.degrees('03:00:00')
+        sz = 1.0/numpy.sin(alt) - 1.0
+        xp = 1.0 + sz*(0.9981833 - sz*(0.002875 + 0.0008083*sz))
+        return xp
 
     def calc_moon(self, site, body):
         """Compute Moon altitude"""
