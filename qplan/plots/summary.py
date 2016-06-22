@@ -12,6 +12,8 @@ from ginga.util import plots
 
 import qsim
 
+import astropy.units as u
+
 class BaseSumPlot(plots.Plot):
     def __init__(self, width, height, logger=None):
         # create matplotlib figure
@@ -47,12 +49,14 @@ class NightSumPlot(BaseSumPlot):
     # Make a bar chart to show which types of OB's will be executed
     # during the night
 
-    def plot(self, schedules):
+    def plot(self, full_sched):
         # Create a plot that shows the activities (e.g., slews, filter
         # changes, etc.) for all the nights.
         plt = self.fig.add_subplot(111)
         plt.set_title('Nightly Activity')
         plt.set_xlabel('Minutes from start of night')
+        
+        schedules = each_night(full_sched)	# split full_sched into nights
 
         # Iterate through all the dates in the schedules list. Note
         # that we iterate in reverse order so that the oldest dates
@@ -61,18 +65,18 @@ class NightSumPlot(BaseSumPlot):
         # qplan/qexec.
         date_list = []
         for i, schedule in enumerate(list(reversed(schedules))):
-            date_list.append(schedule.start_time.strftime('%Y-%m-%d'))
+            date_list.append(start_of(schedule).strftime('%Y-%m-%d'))
             y = [i]
             previous_slot_right = np.array([0.0])
-            for slot in schedule.slots:
-                ob = slot.ob
-                dt = slot.stop_time - slot.start_time
+            for ob in schedule:
+                dt = ob.end_time.to_datetime() - ob.start_time.to_datetime()
                 dt_minutes = dt.total_seconds() / 60.0
                 width = np.array([dt_minutes])
-                if ob is None:
+                if type(ob).__name__ == 'TransitionBlock':
                     ob_type = 'Unscheduled'
                 else:
-                    if ob.derived:
+                    ob.comment = "Science isn't about why; it's about WHY NOT!"	#TODO: find a way to get the actual comment
+                    if True:#ob.derived:
                         if 'Long slew' in ob.comment:
                             ob_type = 'Long slew'
                         elif 'Filter change' in ob.comment:
@@ -168,7 +172,8 @@ class ProposalSumPlot(BaseSumPlot):
 class ScheduleSumPlot(BaseSumPlot):
     # Makes a bar chart to show scheduled/unscheduled minutes for each
     # night
-    def plot(self, schedules):
+    def plot(self, full_sched):
+        schedules = each_night(full_sched)
         plt = self.fig.add_subplot(111)
         plt.set_title('Nightly Schedules')
         plt.set_ylabel('Time (min)')
@@ -177,8 +182,8 @@ class ScheduleSumPlot(BaseSumPlot):
         sched_minutes = []
         unsched_minutes = []
         for schedule in schedules:
-            date_list.append(schedule.start_time.strftime('%Y-%m-%d'))
-            time_avail = schedule.stop_time - schedule.start_time
+            date_list.append(start_of(schedule).strftime('%Y-%m-%d'))
+            time_avail = length_of(schedule)
             time_avail_minutes = time_avail.total_seconds() / 60.0
             time_waste_minutes = qsim.eval_schedule(schedule).time_waste_sec / 60.0
             sched_minutes.append(time_avail_minutes - time_waste_minutes)
@@ -191,14 +196,14 @@ class ScheduleSumPlot(BaseSumPlot):
         unsched_bar = plt.bar(ind, unsched_minutes, self.barWidth, color='darkred', bottom=sched_minutes)
         plt.set_xticks(ind+self.barWidth/2.)
         plt.set_xticklabels(date_list, rotation=45, ha='right')
-        plt.legend((unsched_bar, sched_bar), ('Delay+Unscheduled', 'Scheduled'), prop=self.legendFont)
+        #plt.legend((unsched_bar, sched_bar), ('Delay+Unscheduled', 'Scheduled'), prop=self.legendFont) TODO: Fix this error properly
 
         self.draw()
 
 class SemesterSumPlot(BaseSumPlot):
     # Makes a pie chart to show percentage of available time allocated
     # to each proposal and also the unscheduled time.
-    def plot(self, schedules):
+    def plot(self, full_sched):
         plt = self.fig.add_subplot(111)
         total_time_avail = 0.
         total_time_waste = 0.
@@ -206,22 +211,19 @@ class SemesterSumPlot(BaseSumPlot):
         grades_dict = {}
         for grade in self.grades:
             grades_dict[grade] = []
-        for schedule in schedules:
-            time_avail = schedule.stop_time - schedule.start_time
-            time_avail_minutes = time_avail.total_seconds() / 60.0
-            time_waste_minutes = qsim.eval_schedule(schedule).time_waste_sec / 60.0
-            total_time_avail += time_avail_minutes
-            total_time_waste += time_waste_minutes
-            for slot in schedule.slots:
-                ob = slot.ob
-                if ob is not None:
-                    propID = str(ob.program)
-                    if propID not in grades_dict[ob.program.grade]:
-                        grades_dict[ob.program.grade].append(propID)
-                    if propID in propID_alloc_minutes:
-                        propID_alloc_minutes[propID] += ob.total_time / 60.0
-                    else:
-                        propID_alloc_minutes[propID] = ob.total_time / 60.0
+        time_avail = length_of(full_sched)
+        total_time_avail = time_avail.total_seconds() / 60.0
+        total_time_waste = qsim.eval_schedule(full_sched).time_waste_sec / 60.0
+
+        for ob in full_sched:
+            if type(ob).__name__ != "TransitionBlock":
+                propID = str(ob.program)
+                if propID not in grades_dict[ob.program.grade]:
+                    grades_dict[ob.program.grade].append(propID)
+                if propID in propID_alloc_minutes:
+                    propID_alloc_minutes[propID] += (ob.end_time-ob.start_time).to(u.minute).value
+                else:
+                    propID_alloc_minutes[propID] = (ob.end_time-ob.start_time).to(u.minute).value
 
         total_time_sched = total_time_avail - total_time_waste
         self.logger.debug('propID_alloc_minutes %s' % propID_alloc_minutes)
@@ -260,3 +262,31 @@ class SemesterSumPlot(BaseSumPlot):
         plt.legend(legend_patches, legend_titles, prop=self.legendFont, title='Grades', loc='center left', bbox_to_anchor=(1, 0.5), handlelength=1)
 
         self.draw()
+
+
+def each_night(schedule):	# breaks schedule up into several schedules, separated by daytime
+    schedules = []		# schedules: a list of lists of obs, each inner list being a night
+    night_start = 0
+    for i, block in enumerate(schedule):		# parse through the schedule
+        if type(block).__name__ == "TransitionBlock" and block.components["AtNightConstraint"]:	# if there is a (day) transitionblock at i
+            if night_start < i:					# split the list,
+                schedules.append(schedule[night_start:i])	# add the piece to schedules
+            night_start = i+1					# and move on
+    return schedules
+
+
+def start_of(schedule):	#calculates the start time of a list of OBs; returns a datetime.time
+    if len(schedule) <= 0:
+        return None
+    return schedule[0].start_time.to_datetime()
+
+
+def end_of(schedule):	#calculates the end time of a list of OBs; returns a datetime.time
+    if len(schedule) <= 0:
+        return None
+    return schedule[-1].end_time.to_datetime()
+
+
+def length_of(schedule):#calculates the duration of a list of OBs; returns a datetime.timedelta
+    return end_of(schedule) - start_of(schedule)
+

@@ -26,7 +26,7 @@ class AirMassChart(PlBase.Plugin):
         #self.tz = pytz.utc
 
         sdlr = model.get_scheduler()
-        self.tz = sdlr.timezone
+        self.tz = sdlr.site.timezone
         sdlr.add_callback('schedule-cleared', self.clear_schedule_cb)
         sdlr.add_callback('schedule-added', self.new_schedule_cb)
 

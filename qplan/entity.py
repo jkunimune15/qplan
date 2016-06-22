@@ -11,6 +11,9 @@ import pytz
 # 3rd party imports
 import ephem
 import numpy
+
+import astroplan as apn
+import astropy.units as u
 # ZOPE imports
 try:
     import persistent
@@ -154,7 +157,7 @@ class Slot(object):
     __str__ = __repr__
 
 
-class Schedule(object):
+'''class Schedule(object):
     """
     Schedule
     Defines a series of slots and operations on that series.
@@ -309,7 +312,7 @@ class OB(PersistentEntity):
     def __repr__(self):
         return self.id
 
-    __str__ = __repr__
+    __str__ = __repr__'''
 
 
 class BaseTarget(object):
@@ -370,7 +373,7 @@ class StaticTarget(BaseTarget):
         self.body = ephem.readdb(self.xeph_line)
 
 
-class HSCTarget(StaticTarget):
+"""class HSCTarget(StaticTarget):
     def __init__(self, *args, **kwdargs):
         super(HSCTarget, self).__init__(*args, **kwdargs)
 
@@ -382,10 +385,10 @@ class HSCTarget(StaticTarget):
         if (rec.sdss_ra is not None) and (len(rec.sdss_ra.strip()) > 0):
             self.sdss_calib = StaticTarget(name='SDSS_calib',
                                            ra=rec.sdss_ra, dec=rec.sdss_dec)
-        return code
+        return code"""
 
 
-class Observer(object):
+'''class Observer(object):
     """
     Observer
     """
@@ -770,28 +773,28 @@ class Observer(object):
     def __repr__(self):
         return self.name
 
-    __str__ = __repr__
+    __str__ = __repr__'''
 
+"""class HST(tzinfo):"""
+"""
+HST time zone info.  Used to construct times in HST for planning
+purposes.
+"""
+"""def utcoffset(self, dt):
+return timedelta(hours=-10)
 
-class HST(tzinfo):
-    """
-    HST time zone info.  Used to construct times in HST for planning
-    purposes.
-    """
-    def utcoffset(self, dt):
-        return timedelta(hours=-10)
+def dst(self, dt):
+return timedelta(0)
 
-    def dst(self, dt):
-        return timedelta(0)
+def tzname(self, dt):
+ return 'HST'
 
-    def tzname(self, dt):
-         return 'HST'
-
-    def upper(self):
-         return 'HST'
+def upper(self):
+ return 'HST'"""
 
 
 class TelescopeConfiguration(object):
+    """Contains information about the telescope that must be true during an OB"""
 
     def __init__(self, focus=None, dome=None, comment=''):
         super(TelescopeConfiguration, self).__init__()
@@ -801,8 +804,8 @@ class TelescopeConfiguration(object):
         else:
             dome = dome.lower()
         self.dome = dome
-        self.min_el = 15.0
-        self.max_el = 89.0
+        self.min_el = 15.0*u.degree
+        self.max_el = 89.0*u.degree
         self.comment = comment
 
     def get_el_minmax(self):
@@ -814,6 +817,13 @@ class TelescopeConfiguration(object):
         self.dome = rec.dome.lower()
         self.comment = rec.comment.strip()
         return code
+    
+    def get_constraints(self):	# returns a list of Constraints representing this cfg
+        return [apn.AltitudeConstraint(self.min_el, self.max_el)]
+    
+    def get_configuration(self):	# return a dictionary representing this cfg
+        return {'focus':self.focus, 'dome':self.dome}
+
 
 class InstrumentConfiguration(object):
 
@@ -855,7 +865,8 @@ class SPCAMConfiguration(InstrumentConfiguration):
         return filter_change_time_sec
 
 class HSCConfiguration(InstrumentConfiguration):
-
+    """Contains information about the ??? that must be true during an OB"""
+			#TODO: Figure out what HSC stands for
     def __init__(self, filter=None, guiding=False, num_exp=1, exp_time=10,
                  mode='IMAGE', dither=1, offset_ra=0, offset_dec=0, pa=90,
                  dith1=60, dith2=None, skip=0, stop=None, comment=''):
@@ -907,6 +918,15 @@ class HSCConfiguration(InstrumentConfiguration):
         self.stop = int(rec.stop)
         self.comment = rec.comment.strip()
         return code
+    
+    def get_constraints(self):	# return a list of Constraints representing this cfg
+        return []
+    
+    def get_configuration(self):	# return a dictionary representing this cfg
+        return {'mode':self.mode, 'filter':self.filter, 'dither':self.dither,
+                'guiding':self.guiding, 'num_exp':self.num_exp, 'exp_time':self.exp_time,
+                'offset_ra':self.offset_ra, 'offset_dec':self.offset_dec, 'pa':self.pa,
+                'dith1':self.dith1, 'dith2':self.dith2, 'skip':self.skip, 'stop':self.stop}
 
 class FOCASConfiguration(InstrumentConfiguration):
 
@@ -954,17 +974,18 @@ class FOCASConfiguration(InstrumentConfiguration):
         return code
 
 class EnvironmentConfiguration(object):
+    """Contains information about the environment that must be true during an OB"""
 
     def __init__(self, seeing=None, airmass=None, moon='any',
                  transparency=None, moon_sep=None, comment=''):
         super(EnvironmentConfiguration, self).__init__()
-        self.seeing = seeing
-        self.airmass = airmass
-        self.transparency = transparency
-        self.moon_sep = moon_sep
+        self.seeing = seeing			# ???
+        self.airmass = airmass			# maximum allowable air mass
+        self.transparency = transparency	# minimum allowable air transparency
+        self.moon_sep = moon_sep		# minimum allowable distance from moon
         if (moon == None) or (len(moon) == 0):
             moon = 'any'
-        self.moon = moon.lower()
+        self.moon = moon.lower()		# desired moon phase
         self.comment = comment
 
     def import_record(self, rec):
@@ -983,10 +1004,22 @@ class EnvironmentConfiguration(object):
             self.airmass = None
 
         self.moon = rec.moon
-        self.moon_sep = float(rec.moon_sep)
-        self.transparency = float(rec.transparency)
+        self.moon_sep = float(rec.moon_sep)*u.degree
+        self.transparency = float(rec.transparency)	#TODO: Account for transparency
         self.comment = rec.comment.strip()
         return code
+    
+    def get_constraints(self):	# return a list of Constraints representing this cfg
+        output = []
+        output.append(apn.AirmassConstraint(self.airmass))
+        #TODO: TransparencyConstraint
+        output.append(apn.MoonSeparationConstraint(self.moon_sep))
+        if self.moon == 'dark':
+            output.append(apn.MoonIlluminationConstraint(max=0.25))
+        return output
+    
+    def get_configuration(self):	# return a dictionary representing this cfg
+        return {}
 
 
 class CalculationResult(object):

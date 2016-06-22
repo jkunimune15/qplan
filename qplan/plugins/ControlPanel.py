@@ -200,7 +200,7 @@ class ControlPanel(PlBase.Plugin):
 
                 # get all OB keys for this program
                 for ob in self.ob_qf_dict[propname].obs_info:
-                    key = (propname, ob.name)
+                    key = (propname, ob.target.name)
                     ob_keys.add(key)
                     ob_dict[key] = ob
 
@@ -232,6 +232,7 @@ class ControlPanel(PlBase.Plugin):
             self.oblist_info = oblist_info
 
             # TODO: only needed if we ADD or REMOVE programs
+
             sdlr.set_oblist_info(self.oblist_info)
 
         except Exception as e:

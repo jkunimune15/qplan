@@ -13,6 +13,9 @@ import StringIO
 
 # 3rd party imports
 from ginga.misc import Callback, Bunch
+import astropy.units as u
+import astropy.time as aptime
+import astroplan
 
 # local imports
 import misc
@@ -34,23 +37,24 @@ class Scheduler(Callback.Callbacks):
 
         self.logger = logger
 
-        self.site = common.subaru
-        # TODO: encapsulate this
-        HST = entity.HST()
-        #self.timezone = pytz.timezone('US/Hawaii')
-        self.timezone = HST
+        self.site = astroplan.Observer.at_site("Subaru", timezone="US/Hawaii")
 
         # these are the main data structures used to schedule
         self.oblist = []
         self.schedule_recs = []
         self.programs = {}
 
-        # FOR SCALING PURPOSES ONLY, define maximums
+        # FOR SCALING PURPOSES ONLY, define limits
         # (see cmp_res() )
-        self.max_slew = 20*60.0          # max slew (sec)
-        self.max_rank = 10.0             # max rank
-        self.max_delay = 60*60*10.0      # max wait for visibility (sec)
-        self.max_filterchange = 35*60.0  # max filter exchange time (sec)
+        self.max_slew = 20.0*u.minute		# max slew
+        self.max_rank = 10.0*u.minute		# max rank
+        self.max_delay = 10.0*u.hour		# max wait for visibility
+        self.min_delay = 30.0*u.minute		# min gap to try to place an OB
+        self.max_filterchange = 35*u.minute  	# max filter exchange time
+
+	# other telescope-related constants
+        self.slew_rate = 0.5*u.degree/u.second	# rate of slew
+        self.inst_reconfig_times = None		# a mapping of variables to a mapping of pairs of states to times
 
         # define weights (see cmp_res() method)
         self.weights = Bunch.Bunch(w_rank=0.3, w_delay=0.2,
@@ -306,17 +310,14 @@ class Scheduler(Callback.Callbacks):
 
 
     def schedule_all(self):
-
-        self.make_callback('schedule-cleared')
-
-        # -- Define fillable slots --
-        schedules = []
-        night_slots = []
-        site = self.site
-
-        # measure performance of scheduling
+	""" The main method of Scheduler: take self.oblist and sort it into usable schedule,
+	which is saved in self.schedule
+	"""
+	# Get ready to time yourself
         t_t1 = time.time()
-
+        
+	'''#TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:DEREET
+        site = self.site
         for rec in self.schedule_recs:
             night_start = site.get_date("%s %s" % (rec.date, rec.starttime))
             next_day = night_start + timedelta(0, 3600*14)
@@ -344,10 +345,33 @@ class Scheduler(Callback.Callbacks):
         unschedulable = set(self.oblist) - schedulable
         unschedulable = list(unschedulable)
         self.logger.info("there are %d unschedulable OBs" % (len(unschedulable)))
+        #TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:DEREET'''
 
-        self.logger.info("preparing to schedule")
-        oblist = list(schedulable)
-        self.schedules = []
+        # figure out the start and stop times
+        start_str = self.schedule_recs[0].date+"T"+self.schedule_recs[0].starttime
+        stop_str = self.schedule_recs[-1].date+"T"+self.schedule_recs[-1].stoptime
+        start_time = aptime.Time(start_str, format='isot')
+        stop_time = aptime.Time(stop_str, format='isot') + 24*u.hour
+        num_days = (stop_time.to_datetime()-start_time.to_datetime()).days
+	
+	# call the astroplan scheduling algorithm
+        self.logger.info("preparing to schedule {}".format(map(lambda r: r.date, self.schedule_recs)))
+        transitioner = astroplan.scheduling.Transitioner(self.slew_rate, self.inst_reconfig_times)
+        astroSdlr = astroplan.PriorityScheduler(start_time, stop_time,
+                                                [astroplan.AtNightConstraint()], self.site,
+                                                transitioner, self.min_delay, self.max_slew)
+        self.schedule = astroSdlr(self.oblist)
+
+        print self.schedule
+        print "COMPONENTSSS!"
+        for ob in self.schedule:
+            print type(ob)
+            if type(ob).__name__=="TransitionBlock":
+                print ob.components
+                print '\n'
+            else:
+                print ob.configuration
+                print '\n'
 
         # build a lookup table of programs -> OBs
         props = {}
@@ -367,12 +391,8 @@ class Scheduler(Callback.Callbacks):
             props[pgmname].obcount += 1
             # New policy is not to charge any overhead to the client,
             # including readout time
-            obtime_no_overhead = ob.inscfg.exp_time * ob.inscfg.num_exp
+            obtime_no_overhead = ob.configuration['exp_time'] * ob.configuration['num_exp']
             total_ob_time += obtime_no_overhead
-
-        unscheduled_obs = list(oblist)
-        total_avail = 0.0
-        total_waste = 0.0
 
         # Note oversubscribed time
         self.logger.info("total program time=%d  total ob time=%d" % (
@@ -386,77 +406,71 @@ class Scheduler(Callback.Callbacks):
             self.logger.info("undersubscribed by %.2f hours" % (hrs))
 
         self.logger.info("scheduling %d OBs (from %d programs) for %d nights" % (
-            len(unscheduled_obs), len(self.programs), len(schedules)))
+            len(self.oblist), len(self.programs), num_days))
 
+        '''
         for schedule in schedules:
 
-            start_time = schedule.start_time
-            stop_time  = schedule.stop_time
-            delta = (stop_time - start_time).total_seconds()
-            total_avail += delta / 60.0
+	start_time = schedule.start_time
+	stop_time  = schedule.stop_time
+	delta = (stop_time - start_time).total_seconds()
+	total_avail += delta / 60.0
 
-            nslot = entity.Slot(start_time, delta, data=schedule.data)
-            slots = [ nslot ]
+	nslot = entity.Slot(start_time, delta, data=schedule.data)
+	slots = [ nslot ]
 
-            t = start_time.astimezone(self.timezone)
-            ndate = t.strftime("%Y-%m-%d")
-            #outfile = os.path.join(output_dir, ndate + '.txt')
+	t = start_time.astimezone(self.timezone)
+	ndate = t.strftime("%Y-%m-%d")
+	#outfile = os.path.join(output_dir, ndate + '.txt')
 
-            self.logger.info("scheduling night %s" % (ndate))
+	self.logger.info("scheduling night %s" % (ndate))
 
-            ## this_nights_obs = unscheduled_obs
-            # sort to force deterministic scheduling if the same
-            # files are reloaded
-            this_nights_obs = sorted(unscheduled_obs,
-                                     cmp=lambda ob1, ob2: cmp(str(ob1), str(ob2)))
+	## this_nights_obs = unscheduled_obs
+	# sort to force deterministic scheduling if the same
+	# files are reloaded
+	this_nights_obs = sorted(unscheduled_obs,
+		             cmp=lambda ob1, ob2: cmp(str(ob1), str(ob2)))
 
-            # optomize and rank schedules
-            self.fill_night_schedule(schedule, site, this_nights_obs, props)
+	# optomize and rank schedules
+	self.fill_night_schedule(schedule, site, this_nights_obs, props)
 
-            res = qsim.eval_schedule(schedule)
+	res = qsim.eval_schedule(schedule)
 
-            self.schedules.append(schedule)
-            self.make_callback('schedule-added', schedule)
+	self.schedules.append(schedule)
+	self.make_callback('schedule-added', schedule)
 
-            targets = {}
-            target_list = []
-            for slot in schedule.slots:
+	targets = {}
+	target_list = []
+	for slot in schedule.slots:
 
-                ob = slot.ob
-                if ob != None:
-                    if not ob.derived:
-                        # not an OB generated to serve another OB
-                        key = (ob.target.ra, ob.target.dec)
-                        targets[key] = ob.target
-                        unscheduled_obs.remove(ob)
-                        props[str(ob.program)].obs.remove(ob)
+	ob = slot.ob
+	if ob != None:
+	    if not ob.derived:
+		# not an OB generated to serve another OB
+		key = (ob.target.ra, ob.target.dec)
+		targets[key] = ob.target
+		unscheduled_obs.remove(ob)
+		props[str(ob.program)].obs.remove(ob)
 
-            waste = res.time_waste_sec / 60.0
-            total_waste += waste
+	waste = res.time_waste_sec / 60.0
+	total_waste += waste
 
-            self.logger.info("%d unscheduled OBs left" % (len(unscheduled_obs)))
-
+	self.logger.info("%d unscheduled OBs left" % (len(unscheduled_obs)))
+	'''
+	# check time
         t_elapsed = time.time() - t_t1
         self.logger.info("%.2f sec to schedule all" % (t_elapsed))
 
         # print a summary
         out_f = StringIO.StringIO()
-        num_obs = len(oblist)
+        num_obs = len(self.oblist)
         pct = 0.0
+        unscheduled_obs = filter(lambda ob: ob not in self.schedule, self.oblist)
         if num_obs > 0:
             pct = float(num_obs - len(unscheduled_obs)) / float(num_obs)
         out_f.write("%5.2f %% of OBs scheduled\n" % (pct*100.0))
 
-        if len(unschedulable) > 0:
-            out_f.write("\n")
-            out_f.write("%d OBs are not schedulable:\n" % (len(unschedulable)))
-            ## unschedulable.sort(cmp=lambda ob1, ob2: cmp(ob1.program.proposal,
-            ##                                             ob2.program.proposal))
-
-            for ob in unschedulable:
-                out_f.write("%s (%s)\n" % (ob.name, ob.program.proposal))
-            out_f.write("\n")
-
+	# check how many requested programs we completed
         completed, uncompleted = [], []
         for key in self.programs:
             bnch = props[key]
@@ -471,27 +485,36 @@ class Scheduler(Callback.Callbacks):
                              key=lambda bnch: max_rank - bnch.pgm.rank)
 
         self.make_callback('schedule-completed',
-                           completed, uncompleted, self.schedules)
+                           completed, uncompleted, self.schedule)
 
         out_f.write("Completed programs\n")
         for bnch in completed:
             out_f.write("%-12.12s   %5.2f  %d/%d  100%%\n" % (
                 str(bnch.pgm), bnch.pgm.rank,
                 bnch.obcount, bnch.obcount))
-
         out_f.write("\n")
+
+	# calculate the amount of wasted time
+        total_waste = 0*u.minute
+	total_used = 0*u.minute
+        for block in self.schedule:
+            if type(block).__name__ == 'TransitionBlock':
+                total_waste += (block.end_time-block.start_time).to(u.minute)
+            else:
+                total_used += (block.end_time-block.start_time).to(u.minute)
 
         out_f.write("Uncompleted programs\n")
         for bnch in uncompleted:
             pct = float(bnch.obcount-len(bnch.obs)) / float(bnch.obcount) * 100.0
-            uncompleted_s = ", ".join(map(lambda ob: ob.name, props[str(bnch.pgm)].obs))
+            uncompleted_s = ", ".join(map(lambda ob: ob.target.name, props[str(bnch.pgm)].obs))
 
             out_f.write("%-12.12s   %5.2f  %d/%d  %5.2f%%  [%s]\n" % (
                 str(bnch.pgm), bnch.pgm.rank,
                 bnch.obcount-len(bnch.obs), bnch.obcount, pct,
                 uncompleted_s))
         out_f.write("\n")
-        out_f.write("Total time: avail=%8.2f sched=%8.2f unsched=%8.2f min\n" % (total_avail, (total_avail - total_waste), total_waste))
+        out_f.write("Total time: avail={} sched={} unsched={} min\n".format(
+            (start_time-stop_time).to(u.minute).value, total_used.value, total_waste.value))
         self.summary_report = out_f.getvalue()
         out_f.close()
         self.logger.info(self.summary_report)

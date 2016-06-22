@@ -15,6 +15,9 @@ import re
 
 import entity
 from ginga.misc import Bunch
+import astroplan
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 
 moon_states = ('dark', 'gray', 'dark+gray')
 moon_states_upper = [state.upper() for state in moon_states]
@@ -1034,10 +1037,19 @@ class TgtCfgFile(QueueFile):
                     continue
 
                 rec = self.parse_row(row, self.columnNames,
-                                     self.column_map)
-                #target = entity.StaticTarget()
-                target = entity.HSCTarget()
-                code = target.import_record(rec)
+                                     self.column_map)	# get the information from the row
+
+		# convert ra and dec columns to SkyCoords
+                coords = SkyCoord(ra=rec.ra, dec=rec.dec, unit=u.deg, equinox=rec.eq)
+                try:
+                    sdss_coords = SkyCoord(ra=rec.sdss_ra, dec=rec.sdss_dec, unit=u.deg, equinox=rec.eq)
+                except ValueError:
+                    sdss_coords = None
+		# if sdss_ra and sdss_dec are blank, leave that SkyCoord as None
+		
+		# create a new FixedTarget
+                target = astroplan.FixedTarget(name=rec.name, coord=coords, sdss=sdss_coords)
+                code = rec.code.strip()
 
                 # update existing old record if it exists
                 # since OBs may be pointing to it
@@ -1486,11 +1498,11 @@ class OBListFile(QueueFile):
                 # skip blank lines
                 if len(row[0].strip()) == 0:
                     continue
-
+		# extract information from this line
                 rec = self.parse_row(row, self.columnNames,
                                      self.column_map)
                 code = rec.code.strip()
-
+		
                 program = self.propdict[self.proposal]
                 envcfg = self.envcfgs[rec.env_code.strip()]
                 telcfg = self.telcfgs[rec.tel_code.strip()]
@@ -1500,16 +1512,19 @@ class OBListFile(QueueFile):
                 priority = 1.0
                 if rec.priority != None:
                     priority = float(rec.priority)
-
-                ob = entity.OB(program=program,
-                               target=tgtcfg,
-                               inscfg=inscfg,
-                               envcfg=envcfg,
-                               telcfg=telcfg,
-                               priority=priority,
-                               name=code,
-                               total_time=float(rec.total_time),
-                               acct_time=float(rec.on_src_time))
+		# build configuration and constraints structures
+                configuration = {}
+                configuration.update(envcfg.get_configuration())
+                configuration.update(telcfg.get_configuration())
+                configuration.update(inscfg.get_configuration())
+                constraints = envcfg.get_constraints()+telcfg.get_constraints()+inscfg.get_constraints()
+                # make the OB
+                ob = astroplan.ObservingBlock(target=tgtcfg,
+                                              duration=float(rec.total_time)*u.second,
+                                              priority=priority,	#TODO: Check prt convention
+                                              configuration=configuration,
+                                              constraints=constraints)
+                ob.program = program	# make sure it knows what program it's a part of
                 self.obs_info.append(ob)
 
             except Exception as e:

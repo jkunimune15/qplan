@@ -2,15 +2,6 @@ import pytz
 import entity
 import ephem
 
-# Subaru Telescope
-subaru = entity.Observer('subaru',
-                         longitude='-155:28:48.900',
-                         latitude='+19:49:42.600',
-                         elevation=4163,
-                         pressure=615,
-                         temperature=0,
-                         timezone=pytz.timezone('US/Hawaii'))
-
 # The common solar system bodies
 moon = entity.StaticTarget(name="Moon")
 moon.body = ephem.Moon()

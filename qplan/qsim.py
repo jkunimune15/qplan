@@ -16,6 +16,7 @@ import misc
 import entity
 
 
+
 # maximum rank for a program
 max_rank = 10.0
 
@@ -418,24 +419,22 @@ def check_slot(site, prev_slot, slot, ob, check_moon=True, check_env=True):
     return res
 
 
-def eval_schedule(schedule):
+def eval_schedule(schedule):	# counts the number of filter changes and the wasted seconds
 
     current_filter = None
     num_filter_exchanges = 0
     time_waste_sec = 0.0
 
-    for slot in schedule.slots:
-        ob = slot.ob
+    for ob in schedule:
         # TODO: fix up a more solid check for delays
-        if (ob == None) or ob.comment.startswith('Delay'):
-            delta = (slot.stop_time - slot.start_time).total_seconds()
+        if type(ob).__name__ == "TransitionBlock" and ob.components['?']:
+            delta = (ob.end_time-ob.start_time).to(u.second).value
             time_waste_sec += delta
-            continue
 
-        if ((ob.inscfg.filter is not None) and
-            (ob.inscfg.filter != current_filter)):
+        elif ((ob.configuration['filter'] != None) and
+            (ob.configuration['filter'] != current_filter)):
             num_filter_exchanges += 1
-            current_filter = ob.inscfg.filter
+            current_filter = ob.configuration['filter']
 
     res = Bunch.Bunch(num_filter_exchanges=num_filter_exchanges,
                       time_waste_sec=time_waste_sec)
