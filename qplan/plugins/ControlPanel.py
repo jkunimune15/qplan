@@ -10,7 +10,6 @@ from ginga.gw import Widgets
 
 import PlBase
 import filetypes
-import misc
 
 have_qdb = False
 try:

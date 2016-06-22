@@ -71,7 +71,7 @@ class SlewChart(PlBase.Plugin):
         # plot the current location of solar system objects
         sdlr = model.get_scheduler()
         site = sdlr.site
-        dt = datetime.now(site.tz_local)
+        dt = datetime.now(site.timezone)
         self.view.gui_do(self.plot.plot_targets, site,
                          self.ss, dt, self.ss_colors)
 
@@ -82,10 +82,9 @@ class SlewChart(PlBase.Plugin):
         i = 0
         sdlr = self.model.get_scheduler()
 
-        for slot in schedule.slots:
+        for ob in schedule:
 
-            ob = slot.ob
-            if ob != None:
+            if type(ob).__name__ == "ObservingBlock":
                 if not ob.derived:
                     # not an OB generated to serve another OB
                     key = (ob.target.ra, ob.target.dec)

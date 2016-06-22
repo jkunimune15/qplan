@@ -14,9 +14,9 @@ import PlBase
 
 from ginga.misc import Bunch
 
-import qsim
-
 import HSC
+
+from Scheduler import eval_schedule
 
 
 class Report(PlBase.Plugin):
@@ -172,7 +172,7 @@ class Report(PlBase.Plugin):
             pass
 
     def add_schedule(self, schedule):
-        res = qsim.eval_schedule(schedule)
+        res = eval_schedule(schedule)
 
         start_time = schedule.start_time
         sdlr = self.model.get_scheduler()

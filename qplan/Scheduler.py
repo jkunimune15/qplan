@@ -17,12 +17,6 @@ import astropy.units as u
 import astropy.time as aptime
 import astroplan
 
-# local imports
-import misc
-import entity
-import common
-import qsim
-
 # maximum rank for a program
 max_rank = 10.0
 
@@ -41,7 +35,7 @@ class Scheduler(Callback.Callbacks):
 
         # these are the main data structures used to schedule
         self.oblist = []
-        self.schedule_recs = []
+        self.schedule_recs = None
         self.programs = {}
 
         # FOR SCALING PURPOSES ONLY, define limits
@@ -51,6 +45,7 @@ class Scheduler(Callback.Callbacks):
         self.max_delay = 10.0*u.hour		# max wait for visibility
         self.min_delay = 30.0*u.minute		# min gap to try to place an OB
         self.max_filterchange = 35*u.minute  	# max filter exchange time
+        self.alt_limits = (15.0*u.degree, 89.0*u.degree)
 
 	# other telescope-related constants
         self.slew_rate = 0.5*u.degree/u.second	# rate of slew
@@ -82,232 +77,6 @@ class Scheduler(Callback.Callbacks):
         # structure.
         self.schedule_recs = info
 
-    def cmp_res(self, res1, res2):
-        """
-        Compare two results from check_slot.
-
-        Calculate a number based on the
-        - slew time to target (weight: w_slew)
-        - delay until target visible (weight: w_delay)
-        - time lost (if any) having to change
-             filters (weight: self.w_filterchange)
-        - rank of the program (weight: w_rank)
-
-        LOWER NUMBERS ARE BETTER!
-        """
-        wts = self.weights
-
-        r1_slew = min(res1.slew_sec, self.max_slew) / self.max_slew
-        r1_delay = min(res1.delay_sec, self.max_delay) / self.max_delay
-        r1_filter = min(res1.filterchange_sec, self.max_filterchange) / \
-                    self.max_filterchange
-        r1_rank = min(res1.ob.program.rank, self.max_rank) / self.max_rank
-        # invert because higher rank should make a lower number
-        r1_rank = 1.0 - r1_rank
-        t1 = ((wts.w_slew * r1_slew) + (wts.w_delay * r1_delay) +
-              (wts.w_filterchange * r1_filter) + (wts.w_rank * r1_rank))
-
-        r2_slew = min(res2.slew_sec, self.max_slew) / self.max_slew
-        r2_delay = min(res2.delay_sec, self.max_delay) / self.max_delay
-        r2_filter = min(res2.filterchange_sec, self.max_filterchange) / \
-                    self.max_filterchange
-        r2_rank = min(res2.ob.program.rank, self.max_rank) / self.max_rank
-        r2_rank = 1.0 - r2_rank
-        t2 = ((wts.w_slew * r2_slew) + (wts.w_delay * r2_delay) +
-              (wts.w_filterchange * r2_filter) + (wts.w_rank * r2_rank))
-
-        if res1.ob.program == res2.ob.program:
-            # for OBs in the same program, factor in priority
-            t1 += wts.w_priority * res1.ob.priority
-            t2 += wts.w_priority * res2.ob.priority
-
-        res = int(numpy.sign(t1 - t2))
-        return res
-
-
-    def eval_slot(self, prev_slot, slot, site, oblist):
-
-        # evaluate each OB against this slot
-        results = map(lambda ob: qsim.check_slot(site, prev_slot, slot, ob),
-                      oblist)
-
-        # filter out unobservable OBs
-        good = filter(lambda res: res.obs_ok, results)
-        bad = filter(lambda res: not res.obs_ok, results)
-
-        # sort according to desired criteria
-        good.sort(cmp=self.cmp_res)
-
-        return good, bad
-
-
-    def fill_night_schedule(self, schedule, site, oblist, props):
-
-        cantuse = []
-
-        # check all available OBs against this slot and remove those
-        # that cannot be used a priori
-        usable = []
-        for ob in oblist:
-            res = qsim.check_schedule_invariant(site, schedule, ob)
-            if res.obs_ok:
-                usable.append(ob)
-            else:
-                cantuse.append(ob)
-                ob_id = "%s/%s" % (res.ob.program, res.ob.name)
-                self.logger.debug("rejected %s (%s) because: %s" % (
-                    res.ob, ob_id, res.reason))
-
-        # reassign usable OBs
-        oblist = usable
-
-        # make a visibility map, and reject OBs that are not visible
-        # during this night
-        usable = []
-        obmap = {}
-        for ob in oblist:
-            res = qsim.check_night_visibility(site, schedule, ob)
-            if res.obs_ok:
-                usable.append(ob)
-                # record visibility window
-                obmap[str(ob)] = res
-            else:
-                cantuse.append(ob)
-                ob_id = "%s/%s" % (res.ob.program, res.ob.name)
-                self.logger.debug("rejected %s (%s) because: %s" % (
-                    res.ob, ob_id, res.reason))
-
-        # reassign usable OBs
-        oblist = usable
-
-        done = False
-        while not done:
-            # give GUI thread a chance to run
-            #time.sleep(0.0001)
-
-            slot = schedule.next_free_slot()
-            if slot == None:
-                self.logger.debug("no more empty slots")
-                break
-
-            if len(oblist) == 0:
-                self.logger.debug("no more unassigned OBs")
-                # insert empty time
-                schedule.insert_slot(slot)
-                continue
-
-            # assign filters and other configuration details to new slot
-            slot.data = schedule.data
-
-            # get the previous slot to this one
-            prev_slot = schedule.get_previous(slot)
-
-            # evaluate this slot against the available OBs
-            # with knowledge of the previous slot
-            self.logger.debug("considering slot %s" % (slot))
-            good, bad = self.eval_slot(prev_slot, slot, site, oblist)
-
-            # remove OBs that can't work in the slot and explain why
-            for res in bad:
-                ob = res.ob
-                ob_id = "%s/%s" % (ob.program, ob.name)
-                self.logger.debug("rejected %s (%s) because: %s" % (
-                    ob, ob_id, res.reason))
-                cantuse.append(ob)
-                oblist.remove(ob)
-
-            # insert top slot/ob into the schedule
-            found_one = False
-            for res in good:
-                ob = res.ob
-                ob_id = "%s/%s" % (ob.program, ob.name)
-                # check whether this proposal has exceeded its allotted time
-                # if we schedule this OB
-                # NOTE: charge them for any delay time, filter exch time, etc?
-                # currently: no
-                #obtime = (ob.time_stop - ob.time_start).total_seconds()
-                obtime = ob.total_time
-                acct_time = ob.acct_time
-                prop_total = props[str(ob.program)].sched_time + acct_time
-                if prop_total > props[str(ob.program)].total_time:
-                    self.logger.debug("rejected %s (%s) because it would exceed program allotted time" % (
-                        ob, ob_id))
-                    cantuse.append(ob)
-                    oblist.remove(ob)
-                    continue
-
-                found_one = True
-                break
-
-            # no OBs fit the slot?
-            if not found_one:
-                self.logger.debug("can't find any OBs to fit slot %s" % (
-                    slot))
-                # insert empty time
-                schedule.insert_slot(slot)
-                continue
-
-            # account this scheduled time to the program
-            props[str(ob.program)].sched_time += acct_time
-            dur = ob.total_time / 60.0
-
-            ob_change_sec = 1.0
-            _xx, s_slot, slot = slot.split(slot.start_time, ob_change_sec)
-            new_ob = qsim.setup_ob(ob, ob_change_sec)
-            s_slot.set_ob(new_ob)
-            schedule.insert_slot(s_slot)
-
-            # if a filter change is required, insert a separate OB for that
-            if res.filterchange:
-                _xx, f_slot, slot = slot.split(slot.start_time,
-                                               res.filterchange_sec)
-                new_ob = qsim.filterchange_ob(ob, res.filterchange_sec)
-                f_slot.set_ob(new_ob)
-                schedule.insert_slot(f_slot)
-
-            # if a delay is required, insert a separate OB for that
-            if res.delay_sec > 0.0:
-                _xx, d_slot, slot = slot.split(slot.start_time,
-                                               res.delay_sec)
-                new_ob = qsim.delay_ob(ob, res.delay_sec)
-                d_slot.set_ob(new_ob)
-                schedule.insert_slot(d_slot)
-
-            # is there an SDSS calibration target?
-            if ob.target.sdss_calib is not None:
-                time_add_sec = res.calibration_sec + res.slew_sec
-                _xx, f_slot, slot = slot.split(slot.start_time,
-                                               time_add_sec)
-                sdss_target = ob.target.sdss_calib
-                new_ob = qsim.calibration_ob(ob, sdss_target,
-                                             time_add_sec)
-                f_slot.set_ob(new_ob)
-                schedule.insert_slot(f_slot)
-
-                slew_sec = res.slew2_sec
-            else:
-                slew_sec = res.slew_sec
-
-            ## # if a long slew is required, insert a separate OB for that
-            ## self.logger.debug("slew time for selected object is %.1f sec (deltas: %f, %f)" % (
-            ##     res.slew_sec, res.delta_az, res.delta_alt))
-            ## if res.slew_sec > slew_breakout_limit:
-            ##     _xx, s_slot, slot = slot.split(slot.start_time,
-            ##                                    res.slew_sec)
-            ##     new_ob = qsim.longslew_ob(res.prev_ob, ob, res.slew_sec)
-            ##     s_slot.set_ob(new_ob)
-            ##     schedule.insert_slot(s_slot)
-
-            self.logger.debug("assigning %s(%.2fm) to %s" % (ob, dur, slot))
-            _xx, a_slot, slot = slot.split(slot.start_time, ob.total_time)
-            a_slot.set_ob(ob)
-            schedule.insert_slot(a_slot)
-            oblist.remove(ob)
-
-        # return list of unused OBs
-        oblist.extend(cantuse)
-        return oblist
-
 
     def schedule_all(self):
 	""" The main method of Scheduler: take self.oblist and sort it into usable schedule,
@@ -316,37 +85,6 @@ class Scheduler(Callback.Callbacks):
 	# Get ready to time yourself
         t_t1 = time.time()
         
-	'''#TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:DEREET
-        site = self.site
-        for rec in self.schedule_recs:
-            night_start = site.get_date("%s %s" % (rec.date, rec.starttime))
-            next_day = night_start + timedelta(0, 3600*14)
-            next_day_s = next_day.strftime("%Y-%m-%d")
-            # Assume that stoptime is on the next day, but revert to same
-            # day if resulting end time is less than the start time
-            night_stop = site.get_date("%s %s" % (rec.date, rec.stoptime))
-            if night_stop < night_start:
-                night_stop = site.get_date("%s %s" % (next_day_s, rec.stoptime))
-
-            # associate available filters and other items with this schedule
-            schedules.append(entity.Schedule(night_start, night_stop,
-                                             data=rec.data))
-            delta = (night_stop - night_start).total_seconds()
-            night_slots.append(entity.Slot(night_start, delta,
-                                           data=rec.data))
-
-        # check whether there are some OBs that cannot be scheduled
-        self.logger.info("checking for unschedulable OBs on these nights from %d OBs" % (len(self.oblist)))
-        obmap = qsim.obs_to_slots(self.logger, night_slots, site,
-                                  self.oblist)
-        schedulable = set([])
-        for obs in obmap.values():
-            schedulable = schedulable.union(set(obs))
-        unschedulable = set(self.oblist) - schedulable
-        unschedulable = list(unschedulable)
-        self.logger.info("there are %d unschedulable OBs" % (len(unschedulable)))
-        #TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:TODO:DEREET'''
-
         # figure out the start and stop times
         start_str = self.schedule_recs[0].date+"T"+self.schedule_recs[0].starttime
         stop_str = self.schedule_recs[-1].date+"T"+self.schedule_recs[-1].stoptime
@@ -357,13 +95,11 @@ class Scheduler(Callback.Callbacks):
 	# call the astroplan scheduling algorithm
         self.logger.info("preparing to schedule {}".format(map(lambda r: r.date, self.schedule_recs)))
         transitioner = astroplan.scheduling.Transitioner(self.slew_rate, self.inst_reconfig_times)
-        astroSdlr = astroplan.PriorityScheduler(start_time, stop_time,
-                                                [astroplan.AtNightConstraint()], self.site,
+        constraints = [astroplan.AtNightConstraint(), astroplan.AltitudeConstraint(*self.alt_limits)]
+        astroSdlr = astroplan.PriorityScheduler(start_time, stop_time, constraints, self.site,
                                                 transitioner, self.min_delay, self.max_slew)
-        self.schedule = astroSdlr(self.oblist)
+        self.schedule = astroSdlr(self.oblist) #TODO:figure out transitioner and reconfig_times
 
-        print self.schedule
-        print "COMPONENTSSS!"
         for ob in self.schedule:
             print type(ob)
             if type(ob).__name__=="TransitionBlock":
@@ -408,56 +144,7 @@ class Scheduler(Callback.Callbacks):
         self.logger.info("scheduling %d OBs (from %d programs) for %d nights" % (
             len(self.oblist), len(self.programs), num_days))
 
-        '''
-        for schedule in schedules:
-
-	start_time = schedule.start_time
-	stop_time  = schedule.stop_time
-	delta = (stop_time - start_time).total_seconds()
-	total_avail += delta / 60.0
-
-	nslot = entity.Slot(start_time, delta, data=schedule.data)
-	slots = [ nslot ]
-
-	t = start_time.astimezone(self.timezone)
-	ndate = t.strftime("%Y-%m-%d")
-	#outfile = os.path.join(output_dir, ndate + '.txt')
-
-	self.logger.info("scheduling night %s" % (ndate))
-
-	## this_nights_obs = unscheduled_obs
-	# sort to force deterministic scheduling if the same
-	# files are reloaded
-	this_nights_obs = sorted(unscheduled_obs,
-		             cmp=lambda ob1, ob2: cmp(str(ob1), str(ob2)))
-
-	# optomize and rank schedules
-	self.fill_night_schedule(schedule, site, this_nights_obs, props)
-
-	res = qsim.eval_schedule(schedule)
-
-	self.schedules.append(schedule)
-	self.make_callback('schedule-added', schedule)
-
-	targets = {}
-	target_list = []
-	for slot in schedule.slots:
-
-	ob = slot.ob
-	if ob != None:
-	    if not ob.derived:
-		# not an OB generated to serve another OB
-		key = (ob.target.ra, ob.target.dec)
-		targets[key] = ob.target
-		unscheduled_obs.remove(ob)
-		props[str(ob.program)].obs.remove(ob)
-
-	waste = res.time_waste_sec / 60.0
-	total_waste += waste
-
-	self.logger.info("%d unscheduled OBs left" % (len(unscheduled_obs)))
-	'''
-	# check time
+        # check time
         t_elapsed = time.time() - t_t1
         self.logger.info("%.2f sec to schedule all" % (t_elapsed))
 
@@ -523,5 +210,27 @@ class Scheduler(Callback.Callbacks):
     def select_schedule(self, schedule):
         self.selected_schedule = schedule
         self.make_callback('schedule-selected', schedule)
+
+
+def eval_schedule(schedule):	# counts the number of filter changes and the wasted seconds
+
+    current_filter = None
+    num_filter_exchanges = 0
+    time_waste_sec = 0.0
+
+    for ob in schedule:
+        # TODO: fix up a more solid check for delays
+        if type(ob).__name__ == "TransitionBlock" and ob.components['?']:
+            delta = (ob.end_time-ob.start_time).to(u.second).value
+            time_waste_sec += delta
+
+        elif ((ob.configuration['filter'] != None) and
+            (ob.configuration['filter'] != current_filter)):
+            num_filter_exchanges += 1
+            current_filter = ob.configuration['filter']
+
+    res = Bunch.Bunch(num_filter_exchanges=num_filter_exchanges,
+                      time_waste_sec=time_waste_sec)
+    return res
 
 # END

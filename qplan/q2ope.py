@@ -145,6 +145,7 @@ def main(options, args):
 
 
 if __name__ == "__main__":
+    print("hi")
 
     # Parse command line options with nifty new optparse module
     from optparse import OptionParser

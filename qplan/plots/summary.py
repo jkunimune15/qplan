@@ -9,10 +9,11 @@ from matplotlib.font_manager import FontProperties
 import matplotlib.patches as mpatches
 
 from ginga.util import plots
-
-import qsim
+from ginga.misc import Bunch
 
 import astropy.units as u
+
+from Scheduler import eval_schedule
 
 class BaseSumPlot(plots.Plot):
     def __init__(self, width, height, logger=None):
@@ -185,7 +186,7 @@ class ScheduleSumPlot(BaseSumPlot):
             date_list.append(start_of(schedule).strftime('%Y-%m-%d'))
             time_avail = length_of(schedule)
             time_avail_minutes = time_avail.total_seconds() / 60.0
-            time_waste_minutes = qsim.eval_schedule(schedule).time_waste_sec / 60.0
+            time_waste_minutes = eval_schedule(schedule).time_waste_sec / 60.0
             sched_minutes.append(time_avail_minutes - time_waste_minutes)
             unsched_minutes.append(time_waste_minutes)
         self.logger.debug('ind %s' % ind)
@@ -213,7 +214,7 @@ class SemesterSumPlot(BaseSumPlot):
             grades_dict[grade] = []
         time_avail = length_of(full_sched)
         total_time_avail = time_avail.total_seconds() / 60.0
-        total_time_waste = qsim.eval_schedule(full_sched).time_waste_sec / 60.0
+        total_time_waste = eval_schedule(full_sched).time_waste_sec / 60.0
 
         for ob in full_sched:
             if type(ob).__name__ != "TransitionBlock":

@@ -536,7 +536,7 @@ class ScheduleFile(QueueFile):
 
             rec2 = Bunch.Bunch(date=rec.date, starttime=rec.starttime,
                                stoptime=rec.stoptime,
-                               #categories=categories,
+                               categories=categories,
                                note=rec.note,
                                data=data)
             self.schedule_info.append(rec2)

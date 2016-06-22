@@ -5,7 +5,6 @@ import pytz
 
 import ephem
 
-import misc
 import entity
 
 
@@ -16,6 +15,8 @@ altair = ("19:51:29.74", "8:54:23.5", "2000")
 class TestEntity01(unittest.TestCase):
 
     def setUp(self):
+        for i in range(0,100):
+            print "test_misc.py is being used!"
         self.hst = entity.HST()
         self.utc = pytz.utc
         self.obs = entity.Observer('subaru',

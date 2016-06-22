@@ -8,6 +8,8 @@ from datetime import timedelta
 class Constraints(object):
     
     def __init__(self, observer=None, available_filters=None):
+        for i in range(0,100):
+            print "constraints.py is being used!"
         self.obs = observer
         self.available_filters = available_filters
     
