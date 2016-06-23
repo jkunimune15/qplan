@@ -153,10 +153,7 @@ class TelescopeConfiguration(object):
         self.comment = rec.comment.strip()
         return code
     
-    def get_constraints(self):	# returns a list of Constraints representing this cfg
-        return []
-    
-    def get_configuration(self):	# return a dictionary representing this cfg
+    def get_cfg_info(self):	# return a dictionary representing this cfg
         return {'focus':self.focus, 'dome':self.dome}
 
 
@@ -169,7 +166,7 @@ class InstrumentConfiguration(object):
         self.mode = None
         self.comment = ''
 
-class SPCAMConfiguration(InstrumentConfiguration):	#TODO: find out if I need all these configurations
+class SPCAMConfiguration(InstrumentConfiguration):
 
     def __init__(self, filter=None, guiding=False, num_exp=1, exp_time=10,
                  mode='IMAGE', offset_ra=0, offset_dec=0, pa=90,
@@ -254,14 +251,15 @@ class HSCConfiguration(InstrumentConfiguration):
         self.comment = rec.comment.strip()
         return code
     
-    def get_constraints(self):	# return a list of Constraints representing this cfg
-        return []
-    
-    def get_configuration(self):	# return a dictionary representing this cfg
+    def get_cfg_info(self):	# return a dictionary representing this cfg
         return {'mode':self.mode, 'filter':self.filter, 'dither':self.dither,
                 'guiding':self.guiding, 'num_exp':self.num_exp, 'exp_time':self.exp_time,
                 'offset_ra':self.offset_ra, 'offset_dec':self.offset_dec, 'pa':self.pa,
                 'dith1':self.dith1, 'dith2':self.dith2, 'skip':self.skip, 'stop':self.stop}
+
+    def get_configuration(self):
+        # return a dictionary about the pieces of configuration that will take time to change (currently just filter)
+        return {'filter':self.filter}
 
 class FOCASConfiguration(InstrumentConfiguration):
 
@@ -352,8 +350,5 @@ class EnvironmentConfiguration(object):
         if self.moon == 'dark':
             output.append(apn.MoonIlluminationConstraint(dark_moon_lim))
         return output
-    
-    def get_configuration(self):	# return a dictionary representing this cfg
-        return {}
 
 #END

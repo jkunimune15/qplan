@@ -1486,9 +1486,9 @@ class OBListFile(QueueFile):
         reader = csv.reader(self.queue_file, **self.fmtparams)
         # skip header
         next(reader)
-
         lineNum = 1
-        for row in reader:
+        max_prio = 1.0	# the largest priority this astronomer used
+        for row in reader:	# now get the rest of the information from that line
             try:
                 lineNum += 1
 
@@ -1512,24 +1512,32 @@ class OBListFile(QueueFile):
                 priority = 1.0
                 if rec.priority != None:
                     priority = float(rec.priority)
-		# build configuration and constraints structures
-                configuration = {}
-                configuration.update(envcfg.get_configuration())
-                configuration.update(telcfg.get_configuration())
-                configuration.update(inscfg.get_configuration())
-                constraints = envcfg.get_constraints()+telcfg.get_constraints()+inscfg.get_constraints()
+                if priority > max_prio:	# keep track of the largest prio we've seen yet
+                    max_prio = priority
+		# build configuration and constraints structures, as well as settings for extra info
+                settings = {}
+                settings.update(telcfg.get_cfg_info())
+                settings.update(inscfg.get_cfg_info())
+                configuration = inscfg.get_configuration()
+                constraints = envcfg.get_constraints()
+
                 # make the OB
                 ob = astroplan.ObservingBlock(target=tgtcfg,
                                               duration=float(rec.total_time)*u.second,
-                                              priority=priority,	#TODO: Check prt convention
+                                              priority=priority,
                                               configuration=configuration,
                                               constraints=constraints)
                 ob.program = program	# make sure it knows what program it's a part of
+                ob.settings = settings	# and throw in any other information, like stop and focus
+                
                 self.obs_info.append(ob)
 
             except Exception as e:
                 raise ValueError("Error reading line %d of oblist from file %s: %s" % (
                     lineNum, self.filepath, str(e)))
+
+        for ob in self.obs_info:	# now scale all the priorities down by max_prio
+            ob.priority = (ob.priority)/(max_prio+1)+1
 
 class ProgramFile(QueueFile):
     def __init__(self, input_dir, logger, propname, propdict, file_ext=None, file_obj=None):

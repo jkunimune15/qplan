@@ -49,7 +49,7 @@ class Scheduler(Callback.Callbacks):
 
 	# other telescope-related constants
         self.slew_rate = 0.5*u.degree/u.second	# rate of slew
-        self.inst_reconfig_times = None		# a mapping of variables to a mapping of pairs of states to times
+        self.inst_reconfig_times = calc_reconfig_time()		# a mapping of variables to a mapping of pairs of states to times
 
         # define weights (see cmp_res() method)
         self.weights = Bunch.Bunch(w_rank=0.3, w_delay=0.2,
@@ -90,7 +90,7 @@ class Scheduler(Callback.Callbacks):
         stop_str = self.schedule_recs[-1].date+"T"+self.schedule_recs[-1].stoptime
         start_time = aptime.Time(start_str, format='isot')
         stop_time = aptime.Time(stop_str, format='isot') + 24*u.hour
-        num_days = (stop_time.to_datetime()-start_time.to_datetime()).days
+        num_days = (stop_time.to_datetime()-start_time.to_datetime()).days + 1
 	
 	# call the astroplan scheduling algorithm
         self.logger.info("preparing to schedule {}".format(map(lambda r: r.date, self.schedule_recs)))
@@ -98,16 +98,7 @@ class Scheduler(Callback.Callbacks):
         constraints = [astroplan.AtNightConstraint(), astroplan.AltitudeConstraint(*self.alt_limits)]
         astroSdlr = astroplan.PriorityScheduler(start_time, stop_time, constraints, self.site,
                                                 transitioner, self.min_delay, self.max_slew)
-        self.schedule = astroSdlr(self.oblist) #TODO:figure out transitioner and reconfig_times
-
-        for ob in self.schedule:
-            print type(ob)
-            if type(ob).__name__=="TransitionBlock":
-                print ob.components
-                print '\n'
-            else:
-                print ob.configuration
-                print '\n'
+        self.schedule = astroSdlr(self.oblist)	# TODO: make this sequential
 
         # build a lookup table of programs -> OBs
         props = {}
@@ -127,7 +118,7 @@ class Scheduler(Callback.Callbacks):
             props[pgmname].obcount += 1
             # New policy is not to charge any overhead to the client,
             # including readout time
-            obtime_no_overhead = ob.configuration['exp_time'] * ob.configuration['num_exp']
+            obtime_no_overhead = ob.settings['exp_time'] * ob.settings['num_exp']
             total_ob_time += obtime_no_overhead
 
         # Note oversubscribed time
@@ -152,7 +143,17 @@ class Scheduler(Callback.Callbacks):
         out_f = StringIO.StringIO()
         num_obs = len(self.oblist)
         pct = 0.0
-        unscheduled_obs = filter(lambda ob: ob not in self.schedule, self.oblist)
+
+        # count all the obs that didn't make it into the final schedule
+        unscheduled_obs = []
+        for proposed_ob in self.oblist:
+            scheduled = False
+            for chosen_ob in self.schedule:
+                if chosen_ob.target.name == proposed_ob.target.name:
+                    scheduled = True
+                    break
+            if not scheduled:
+                unscheduled_obs.append(proposed_ob)    
         if num_obs > 0:
             pct = float(num_obs - len(unscheduled_obs)) / float(num_obs)
         out_f.write("%5.2f %% of OBs scheduled\n" % (pct*100.0))
@@ -161,19 +162,24 @@ class Scheduler(Callback.Callbacks):
         completed, uncompleted = [], []
         for key in self.programs:
             bnch = props[key]
-            if len(bnch.obs) == 0:
+            for i in range(len(bnch.obs), 0, -1):
+                ob = bnch.obs[i-1]
+                if ob in unscheduled_obs:
+                    if not bnch in uncompleted:
+                        uncompleted.append(bnch)
+                else:
+                    bnch.obs.remove(ob)
+            if not bnch in uncompleted:
                 completed.append(bnch)
-            else:
-                uncompleted.append(bnch)
 
         completed = sorted(completed,
                            key=lambda bnch: max_rank - bnch.pgm.rank)
         uncompleted = sorted(uncompleted,
                              key=lambda bnch: max_rank - bnch.pgm.rank)
-
         self.make_callback('schedule-completed',
                            completed, uncompleted, self.schedule)
-
+	
+	# print out the completed programs
         out_f.write("Completed programs\n")
         for bnch in completed:
             out_f.write("%-12.12s   %5.2f  %d/%d  100%%\n" % (
@@ -190,12 +196,13 @@ class Scheduler(Callback.Callbacks):
             else:
                 total_used += (block.end_time-block.start_time).to(u.minute)
 
+	# print out the uncompleted ones
         out_f.write("Uncompleted programs\n")
         for bnch in uncompleted:
             pct = float(bnch.obcount-len(bnch.obs)) / float(bnch.obcount) * 100.0
-            uncompleted_s = ", ".join(map(lambda ob: ob.target.name, props[str(bnch.pgm)].obs))
+            uncompleted_s = "["+", ".join(map(lambda ob: ob.target.name, props[str(bnch.pgm)].obs))+"]"
 
-            out_f.write("%-12.12s   %5.2f  %d/%d  %5.2f%%  [%s]\n" % (
+            out_f.write("%-12.12s   %5.2f  %d/%d  %5.2f%%  %-142.142s\n" % (
                 str(bnch.pgm), bnch.pgm.rank,
                 bnch.obcount-len(bnch.obs), bnch.obcount, pct,
                 uncompleted_s))
@@ -219,18 +226,29 @@ def eval_schedule(schedule):	# counts the number of filter changes and the waste
     time_waste_sec = 0.0
 
     for ob in schedule:
-        # TODO: fix up a more solid check for delays
-        if type(ob).__name__ == "TransitionBlock" and ob.components['?']:
+        if type(ob).__name__ == "TransitionBlock" and ob.components['AtNightConstraint']:
             delta = (ob.end_time-ob.start_time).to(u.second).value
             time_waste_sec += delta
 
-        elif ((ob.configuration['filter'] != None) and
-            (ob.configuration['filter'] != current_filter)):
+        elif ((ob.settings['filter'] != None) and
+            (ob.settings['filter'] != current_filter)):
             num_filter_exchanges += 1
-            current_filter = ob.configuration['filter']
+            current_filter = ob.settings['filter']
 
     res = Bunch.Bunch(num_filter_exchanges=num_filter_exchanges,
                       time_waste_sec=time_waste_sec)
     return res
+
+
+def calc_reconfig_time():	# builds a nested dictionary of reconfiguration times
+    output = {'filter':{}}
+    list_of_filters = ['g','r','i','z','Y','SH','nb656','nb515',None]
+    for filter1 in list_of_filters:
+        for filter2 in list_of_filters:
+            if filter1 == filter2:
+                output['filter'][(filter1, filter2)] = 0*u.hour
+            else:
+                output['filter'][(filter1, filter2)] = 1*u.hour
+    return output
 
 # END
