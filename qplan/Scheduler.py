@@ -51,7 +51,7 @@ class Scheduler(Callback.Callbacks):
         self.slew_rate = 0.5*u.degree/u.second	# rate of slew
         self.inst_reconfig_times = calc_reconfig_time()		# a mapping of variables to a mapping of pairs of states to times
 
-        # define weights (see cmp_res() method)
+        # define weights (see cmp_res() method)	TODO: Use these
         self.weights = Bunch.Bunch(w_rank=0.3, w_delay=0.2,
                                    w_slew=0.2, w_priority=0.1,
                                    w_filterchange = 0.3)
@@ -85,28 +85,31 @@ class Scheduler(Callback.Callbacks):
 
 
     def schedule_all(self):
-	""" The main method of Scheduler: take self.oblist and sort it into usable schedule,
-	which is saved in self.schedule
+	""" call the main scheduling algorithm and deduce stats about the new schedule
 	"""
 	# Get ready to time yourself
         t_t1 = time.time()
         
         # figure out the start and stop times
-        start_str = self.schedule_recs[0].date+"T"+self.schedule_recs[0].starttime
-        stop_str = self.schedule_recs[-1].date+"T"+self.schedule_recs[-1].stoptime
-        start_time = aptime.Time(start_str, format='isot')
-        stop_time = aptime.Time(stop_str, format='isot') + 24*u.hour
-        num_days = (stop_time.to_datetime()-start_time.to_datetime()).days + 1
+        start_str = self.schedule_recs[0].date+" "+self.schedule_recs[0].starttime
+        end_str = self.schedule_recs[-1].date+" "+self.schedule_recs[-1].stoptime
+        start_time = aptime.Time(start_str)
+        end_time = aptime.Time(end_str) + 24*u.hour
+        num_days = (end_time.to_datetime()-start_time.to_datetime()).days + 1
 	
-	# call the astroplan scheduling algorithm
-        self.logger.info("preparing to schedule {}".format(map(lambda r: r.date, self.schedule_recs)))
-        transitioner = astroplan.Transitioner(self.slew_rate, self.inst_reconfig_times)
-        constraints = [astroplan.AtNightConstraint(), astroplan.AltitudeConstraint(*self.alt_limits)]
-        astroSdlr = astroplan.PriorityScheduler(start_time, stop_time, constraints, self.site,
-                                                transitioner, self.min_delay)#, self.max_slew)
-        self.schedule = astroSdlr(self.oblist)
-        self.schedule = chronilogical(self.schedule)
+	# do some final assignments
+        self.logger.info("scheduling %d OBs (from %d programs) for %d nights" % (
+            len(self.oblist), len(self.programs), num_days))
+        self.transitioner = astroplan.Transitioner(self.slew_rate, self.inst_reconfig_times)
+        self.constraints = [astroplan.AtNightConstraint(), astroplan.AltitudeConstraint(*self.alt_limits)]
 
+	# call the algorithm
+        blk_lsts = self(start_time, end_time)
+        self.schedule = blk_lsts[0]
+        self.unscheduled_obs = blk_lsts[1]
+        self.logger.info("schedule generated in %.2f sec" (t_elapsed))
+
+	#TODO: delete this
         for ob in self.schedule:
             try:
                 print ob.start_time,"%-12.12s"%ob.target.name,ob.end_time
@@ -145,9 +148,6 @@ class Scheduler(Callback.Callbacks):
             hrs = float(-diff) / 3600.0
             self.logger.info("undersubscribed by %.2f hours" % (hrs))
 
-        self.logger.info("scheduling %d OBs (from %d programs) for %d nights" % (
-            len(self.oblist), len(self.programs), num_days))
-
         # check time
         t_elapsed = time.time() - t_t1
         self.logger.info("%.2f sec to schedule all" % (t_elapsed))
@@ -155,20 +155,10 @@ class Scheduler(Callback.Callbacks):
         # print a summary
         out_f = StringIO.StringIO()
         num_obs = len(self.oblist)
-        pct = 0.0
-
-        # count all the obs that didn't make it into the final schedule
-        unscheduled_obs = []
-        for proposed_ob in self.oblist:
-            scheduled = False
-            for chosen_ob in self.schedule:
-                if type(chosen_ob).__name__=="ObservingBlock" and chosen_ob.target.name == proposed_ob.target.name:
-                    scheduled = True
-                    break
-            if not scheduled:
-                unscheduled_obs.append(proposed_ob)    
         if num_obs > 0:
             pct = float(num_obs - len(unscheduled_obs)) / float(num_obs)
+        else:
+            pct = 0.
         out_f.write("%5.2f %% of OBs scheduled\n" % (pct*100.0))
 
 	# check how many requested programs we completed
@@ -221,7 +211,7 @@ class Scheduler(Callback.Callbacks):
                 uncompleted_s))
         out_f.write("\n")
         out_f.write("Total time: avail={} sched={} unsched={} min\n".format(
-            (stop_time-start_time).to(u.minute).value, total_used.value, total_waste.value))
+            (end_time-start_time).to(u.minute).value, total_used.value, total_waste.value))
         self.summary_report = out_f.getvalue()
         out_f.close()
         self.logger.info(self.summary_report)
@@ -246,7 +236,85 @@ class Scheduler(Callback.Callbacks):
         return output
 
 
+    def __call__(self, start_time, end_time):
+        """
+        Compose a schedule made out of the OBs in self.oblist.
+        Parameters
+            start_time: an astropy.Time object indicating the beginning of this schedule
+            end_time:   an astropy.Time object indicating the end of this schedule
+        returns
+            a list of two lists, the unused OBs, and the organized OBs and TBs.
+	NOTE:
+	    self.oblist will not be altered, nor will any attributes of self.
+	    The OBs in the returned lists will not be copies, though, and the
+	    OBs that make it into the final schedule will be altered
+        """
+        # start by combining universal constraints with OB-specific constraints
+        for ob in self.oblist:
+            if ob.constraints is None:
+                ob._all_constraints = self.constraints
+            else:
+                ob._all_constraints = self.constraints + ob.constraints
+            ob._time_scale = u.Quantity([0*u.minute, ob.duration/2, ob.duration])
+        
+        # define the main variables and start scheduling
+        final_blocks = []
+        unschedulable = []
+        remaining_blocks = list(self.oblist)
+        current_time = start_time
+        while len(remaining_blocks) > 0 and current_time < end_time:
+	    # score each potential ob based on how well it would fit here
+            block_transitions = []
+            block_scores = []
+            for ob in reversed(remaining_blocks):
+                # first calculate transition
+                if len(final_blocks) > 0 and type(final_blocks[-1]) == astroplan.ObservingBlock:
+                    tb = self.transitioner(final_blocks[-1], ob, current_time, self.site)
+                    transition_time = tb.duration
+                else:
+                    tb = None
+                    transition_time = 0*u.minute
+                block_transitions.append(tb)
+                
+		# now verify that it is observable during this time
+                times = current_time + transition_time + ob._time_scale
+                if times[-1] <= end_time:
+                    observable = astroplan.is_always_observable(ob._all_constraints, self.site,
+                                                                [ob.target], times)
+                    if observable[0]:
+                        block_scores.append(ob.priority)
+                    else:
+                        block_scores.append(0)
+		# if it would run over the end of the schedule, then assume it is unschedulable
+                else:
+                    unschedulable.append(ob)
+                    block_transitions.pop()
+                    remaining_blocks.remove(ob)
+                    continue
 
+	    # now that all that's been calculated, pick the best block
+            best_block_idx = np.argmax(block_scores)
+        
+	    # if the best block is unobservable, then we obviously need a delay
+            if block_scores[best_block_idx] == 0.:
+                self.logger.info("nothing observable at %s" % (current_time))
+                final_blocks.append(astroplan.TransitionBlock({'nothing_observable': self.min_delay}, current_time))
+                current_time += self.min_delay
+	    # otherwise, go ahead and add it to the schedule; don't forget the TransitionBlock!
+            else:
+                tb = block_transitions.pop(best_block_idx)
+                ob = remaining_blocks.pop(best_block_idx)
+                if tb is not None:
+                    final_blocks.append(tb)
+                    current_time += tb.duration
+                ob.start_time = current_time
+                current_time += ob.duration
+                ob.end_time = current_time
+                ob.constraints_value = block_scores[best_block_idx]
+                final_blocks.append(ob)
+        
+        # return the scheduled blocks and the unscheduled blocks
+        return [final_blocks, remaining_blocks+unschedulable]   
 
 
 def eval_schedule(schedule):	# counts the number of filter changes and the wasted seconds
@@ -280,17 +348,5 @@ def calc_reconfig_time():	# builds a nested dictionary of reconfiguration times
             else:
                 output['filter'][(filter1, filter2)] = 1*u.hour
     return output
-
-
-def chronilogical(blocks):	# sorts observation blocks chronilogically and with transitions
-    new_blocks = sorted(blocks, key=lambda b: b.start_time)
-    for i in range(len(new_blocks)-1, 0, -1):
-        if new_blocks[i].start_time > new_blocks[i-1].end_time:
-            t1 = new_blocks[i-1].end_time
-            t2 = new_blocks[i].start_time
-            new_trans = astroplan.TransitionBlock(components={'unknown':t2-t1}, start_time=t1)
-            new_trans.components = {'unknown':t2-t1}
-            new_blocks.insert(i,new_trans)
-    return new_blocks
 
 # END
