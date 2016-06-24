@@ -8,6 +8,9 @@ import string
 import math
 import pytz
 
+# local imports
+import constraints as custom
+
 # 3rd party imports
 import ephem
 import numpy
@@ -197,8 +200,7 @@ class SPCAMConfiguration(InstrumentConfiguration):
         return filter_change_time_sec
 
 class HSCConfiguration(InstrumentConfiguration):
-    """Contains information about the ??? that must be true during an OB"""
-			#TODO: Figure out what HSC stands for
+    """Contains information about the (high-speed-camera?) that must be true during an OB"""
     def __init__(self, filter=None, guiding=False, num_exp=1, exp_time=10,
                  mode='IMAGE', dither=1, offset_ra=0, offset_dec=0, pa=90,
                  dith1=60, dith2=None, skip=0, stop=None, comment=''):
@@ -345,10 +347,13 @@ class EnvironmentConfiguration(object):
     def get_constraints(self):	# return a list of Constraints representing this cfg
         output = []
         output.append(apn.AirmassConstraint(self.airmass))
-        #TODO: TransparencyConstraint
+        #output.append(custom.TransparencyConstraint(self.transparency))	# this is very slow
         output.append(apn.MoonSeparationConstraint(self.moon_sep))
         if self.moon == 'dark':
-            output.append(apn.MoonIlluminationConstraint(dark_moon_lim))
+            output.append(custom.MoonIlluminationConstraint(min=0., max=dark_moon_lim))
+        else:
+            output.append(custom.MoonIlluminationConstraint(min=0., max=1.))
         return output
 
 #END
+

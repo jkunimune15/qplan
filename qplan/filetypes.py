@@ -7,6 +7,7 @@
 import os
 import pandas as pd
 import numpy as np
+import random
 import csv
 import string
 import StringIO
@@ -1537,7 +1538,8 @@ class OBListFile(QueueFile):
                     lineNum, self.filepath, str(e)))
 
         for ob in self.obs_info:	# now scale all the priorities down by max_prio
-            ob.priority = (ob.priority)/(max_prio+1)+1
+            ob.priority = (ob.priority)*16/(max_prio+1)+1# + random.random()
+            # the random element prevents obs from having identical priorities
 
 class ProgramFile(QueueFile):
     def __init__(self, input_dir, logger, propname, propdict, file_ext=None, file_obj=None):

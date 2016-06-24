@@ -73,21 +73,14 @@ class NightSumPlot(BaseSumPlot):
                 dt = ob.end_time.to_datetime() - ob.start_time.to_datetime()
                 dt_minutes = dt.total_seconds() / 60.0
                 width = np.array([dt_minutes])
-                if type(ob).__name__ == 'TransitionBlock':
-                    ob_type = 'Unscheduled'
+                if type(ob).__name__ == 'ObservingBlock':
+                    ob_type = 'Science'
+                elif 'slew' in ob.component.keys():
+                    ob_type = 'Long slew'
+                elif 'filter' in ob.component.keys():
+                    ob_type = 'Filter change'
                 else:
-                    ob.comment = "Science isn't about why; it's about WHY NOT!"	#TODO: find a way to get the actual comment
-                    if True:#ob.derived:
-                        if 'Long slew' in ob.comment:
-                            ob_type = 'Long slew'
-                        elif 'Filter change' in ob.comment:
-                            ob_type = 'Filter change'
-                        elif 'Delay' in ob.comment:
-                            ob_type = 'Delay'
-                        else:
-                            ob_type = 'Science'
-                    else:
-                        ob_type = 'Science'
+                    ob_type = 'Delay'
 
                 bar = plt.barh(y, width, self.barWidth, left=previous_slot_right, color=self.activity_colors[ob_type])
                 previous_slot_right += width
@@ -197,7 +190,7 @@ class ScheduleSumPlot(BaseSumPlot):
         unsched_bar = plt.bar(ind, unsched_minutes, self.barWidth, color='darkred', bottom=sched_minutes)
         plt.set_xticks(ind+self.barWidth/2.)
         plt.set_xticklabels(date_list, rotation=45, ha='right')
-        #plt.legend((unsched_bar, sched_bar), ('Delay+Unscheduled', 'Scheduled'), prop=self.legendFont) TODO: Fix this error properly
+        plt.legend((unsched_bar, sched_bar), ('Delay+Unscheduled', 'Scheduled'), prop=self.legendFont)
 
         self.draw()
 
@@ -273,6 +266,8 @@ def each_night(schedule):	# breaks schedule up into several schedules, separated
             if night_start < i:					# split the list,
                 schedules.append(schedule[night_start:i])	# add the piece to schedules
             night_start = i+1					# and move on
+    if night_start < len(schedule):
+        schedules.append(schedule[night_start:i])
     return schedules
 
 

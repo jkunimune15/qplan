@@ -8,14 +8,14 @@ import os
 import time
 from datetime import timedelta
 import pytz
-import numpy
+import numpy as np
 import StringIO
 
 # 3rd party imports
 from ginga.misc import Callback, Bunch
+import astroplan
 import astropy.units as u
 import astropy.time as aptime
-import astroplan
 
 # maximum rank for a program
 max_rank = 10.0
@@ -69,8 +69,14 @@ class Scheduler(Callback.Callbacks):
             if not rec.skip:
                 self.programs[key] = rec
 
-    def set_oblist_info(self, info):
+    def set_oblist_info(self, info):	#import some data for our oblist
         self.oblist = info
+        #for ob in self.oblist:
+        #    for c in ob.constraints:
+        #        try:
+        #            c.set_sdlr(self)	# assisgn yourself to the constraints while you're at it
+        #        except AttributeError:
+        #            continue
 
     def set_schedule_info(self, info):
         # Set our schedule_recs attribute to the supplied data
@@ -94,11 +100,18 @@ class Scheduler(Callback.Callbacks):
 	
 	# call the astroplan scheduling algorithm
         self.logger.info("preparing to schedule {}".format(map(lambda r: r.date, self.schedule_recs)))
-        transitioner = astroplan.scheduling.Transitioner(self.slew_rate, self.inst_reconfig_times)
+        transitioner = astroplan.Transitioner(self.slew_rate, self.inst_reconfig_times)
         constraints = [astroplan.AtNightConstraint(), astroplan.AltitudeConstraint(*self.alt_limits)]
         astroSdlr = astroplan.PriorityScheduler(start_time, stop_time, constraints, self.site,
-                                                transitioner, self.min_delay, self.max_slew)
-        self.schedule = astroSdlr(self.oblist)	# TODO: make this sequential
+                                                transitioner, self.min_delay)#, self.max_slew)
+        self.schedule = astroSdlr(self.oblist)
+        self.schedule = chronilogical(self.schedule)
+
+        for ob in self.schedule:
+            try:
+                print ob.start_time,"%-12.12s"%ob.target.name,ob.end_time
+            except Exception:
+                print ob.start_time,"%-12.12s"%"Transition","I can't even"
 
         # build a lookup table of programs -> OBs
         props = {}
@@ -149,7 +162,7 @@ class Scheduler(Callback.Callbacks):
         for proposed_ob in self.oblist:
             scheduled = False
             for chosen_ob in self.schedule:
-                if chosen_ob.target.name == proposed_ob.target.name:
+                if type(chosen_ob).__name__=="ObservingBlock" and chosen_ob.target.name == proposed_ob.target.name:
                     scheduled = True
                     break
             if not scheduled:
@@ -208,7 +221,7 @@ class Scheduler(Callback.Callbacks):
                 uncompleted_s))
         out_f.write("\n")
         out_f.write("Total time: avail={} sched={} unsched={} min\n".format(
-            (start_time-stop_time).to(u.minute).value, total_used.value, total_waste.value))
+            (stop_time-start_time).to(u.minute).value, total_used.value, total_waste.value))
         self.summary_report = out_f.getvalue()
         out_f.close()
         self.logger.info(self.summary_report)
@@ -217,6 +230,23 @@ class Scheduler(Callback.Callbacks):
     def select_schedule(self, schedule):
         self.selected_schedule = schedule
         self.make_callback('schedule-selected', schedule)
+
+
+    def calc_transparency(self, times):	# finds the sky transparency at specified times
+        """
+        finds the sky transparency at specified times and place
+        times is an astropy.Time object, place is an astroplan.site object, and return val is a list of floats
+        """
+        output = np.ones(times.size)*0.9	# initialize output to an array of zeros
+        times.format = 'iso'
+        for i, time in enumerate(times):
+            for rec in self.schedule_recs:	# assume transparency changes on a daily basis
+                if time.value[0:10] == rec.date[0:10]:
+                    rec.data.transparency
+        return output
+
+
+
 
 
 def eval_schedule(schedule):	# counts the number of filter changes and the wasted seconds
@@ -250,5 +280,17 @@ def calc_reconfig_time():	# builds a nested dictionary of reconfiguration times
             else:
                 output['filter'][(filter1, filter2)] = 1*u.hour
     return output
+
+
+def chronilogical(blocks):	# sorts observation blocks chronilogically and with transitions
+    new_blocks = sorted(blocks, key=lambda b: b.start_time)
+    for i in range(len(new_blocks)-1, 0, -1):
+        if new_blocks[i].start_time > new_blocks[i-1].end_time:
+            t1 = new_blocks[i-1].end_time
+            t2 = new_blocks[i].start_time
+            new_trans = astroplan.TransitionBlock(components={'unknown':t2-t1}, start_time=t1)
+            new_trans.components = {'unknown':t2-t1}
+            new_blocks.insert(i,new_trans)
+    return new_blocks
 
 # END

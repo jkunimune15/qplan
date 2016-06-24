@@ -1,49 +1,76 @@
 #
-# constraints.py -- scheduling constraints
+# constraints.py -- custom extensions to the astroplan.Constraint class
 #
-#  Eric Jeschke (eric@naoj.org)
+#  Justin Kunimune (justinku@naoj.org)
 #
-from datetime import timedelta
+import numpy as np
 
-class Constraints(object):
+# 3rd party imports
+import astropy.units as u
+from astroplan import Constraint
+from astroplan.moon import moon_illumination
+
+
+class TransparencyConstraint(Constraint):
+    """
+    Constraint the transparency of the sky
+    """
+    def __init__(self, min=None, max=None, sdlr=None):
+        self.sdlr = sdlr	# this scheudler is used to calculate transparency
+        self.min = min
+        self.max = max
+
+    def set_sdlr(self, sdlr):
+        self.sdlr = sdlr
     
-    def __init__(self, observer=None, available_filters=None):
-        for i in range(0,100):
-            print "constraints.py is being used!"
-        self.obs = observer
-        self.available_filters = available_filters
-    
-    def cns_correct_filters(self, slot, ob):
+    def compute_constraint(self, times, observer, targets):
+        transparency = np.array([self.sdlr.calc_transparency(times)]*len(targets))
+        if self.min is None and self.max is not None:
+            mask = self.max >= transparency
+        elif self.max is None and self.min is not None:
+            mask = self.min <= transparency
+        elif self.min is not None and self.max is not None:
+            mask = ((self.min <= transparency) &
+                    (illumination <= self.max))
+        else:
+            raise ValueError("No max and/or min specified in "
+                             "TransparencyConstraint.")
+        return mask
+
+
+class MoonIlluminationConstraint(Constraint):
+    """
+    Constrain the fractional illumination of the Earth's moon.
+    Almsot identical to astrolpan.MoonIlluminationConstraint, but with one bug fixed for.
+    """
+    def __init__(self, min=None, max=None):
         """
-        Make sure there are no filters specified by this OB that
-        are not available.
+        Parameters
+        ----------
+        min : float or `None` (optional)
+            Minimum acceptable fractional illumination (inclusive). `None`
+            indicates no limit.
+        max : float or `None` (optional)
+            Maximum acceptable fractional illumination (inclusive). `None`
+            indicates no limit.
         """
-        return ob.filter in self.available_filters
+        self.min = min
+        self.max = max
 
-
-    def cns_target_observable(self, slot, ob):
-        """
-        Make sure that the target specified is viewable with the
-        OB's desired elevation and airmass constraints.
-        """
-
-        s_time = slot.start_time
-        e_time = slot.stop_time
-        
-        min_el, max_el = ob.get_el_minmax()
-        
-        (obs_ok, start) = self.obs.observable(ob.target, s_time, e_time,
-                                              min_el, max_el, ob.total_time,
-                                              airmass=ob.airmass)
-        return obs_ok
-
-
-    ## def cns_time_enough(self, slot, ob):
-    ##     """
-    ##     Make sure the time taken by the observing block fits the slot.
-    ##     """
-    ##     time_done = slot.start_time + timedelta(0, ob.total_time)
-    ##     return time_done <= slot.stop_time
+    def compute_constraint(self, times, observer, targets):
+        illumination = np.array([moon_illumination(times, observer.location)]*len(targets))
+	#                       ^                                           ^
+	# I added these brackets and the *len(targets) to force illumination to have the correct shape
+        if self.min is None and self.max is not None:
+            mask = self.max >= illumination
+        elif self.max is None and self.min is not None:
+            mask = self.min <= illumination
+        elif self.min is not None and self.max is not None:
+            mask = ((self.min <= illumination) &
+                    (illumination <= self.max))
+        else:
+            raise ValueError("No max and/or min specified in "
+                             "MoonSeparationConstraint.")
+        return mask
 
 #END
-
