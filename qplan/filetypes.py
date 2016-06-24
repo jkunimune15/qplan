@@ -1538,8 +1538,7 @@ class OBListFile(QueueFile):
                     lineNum, self.filepath, str(e)))
 
         for ob in self.obs_info:	# now scale all the priorities down by max_prio
-            ob.priority = (ob.priority)*16/(max_prio+1)+1# + random.random()
-            # the random element prevents obs from having identical priorities
+            ob.priority = ob.priority/(max_prio+1)+1
 
 class ProgramFile(QueueFile):
     def __init__(self, input_dir, logger, propname, propdict, file_ext=None, file_obj=None):

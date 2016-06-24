@@ -31,7 +31,8 @@ class Scheduler(Callback.Callbacks):
 
         self.logger = logger
 
-        self.site = astroplan.Observer.at_site("Subaru", timezone="US/Hawaii")
+        self.site = astroplan.Observer.at_site("Subaru", timezone="US/Hawaii",
+                                               pressure=81993*u.Pa, temperature=0*u.deg_C)
 
         # these are the main data structures used to schedule
         self.oblist = []
@@ -39,7 +40,7 @@ class Scheduler(Callback.Callbacks):
         self.programs = {}
 
         # FOR SCALING PURPOSES ONLY, define limits
-        # (see cmp_res() )
+        # (see score() )
         self.max_slew = 20.0*u.minute		# max slew
         self.max_rank = 10.0*u.minute		# max rank
         self.max_delay = 10.0*u.hour		# max wait for visibility
@@ -50,7 +51,7 @@ class Scheduler(Callback.Callbacks):
         self.slew_rate = 0.5*u.degree/u.second	# rate of slew
         self.inst_reconfig_times = calc_reconfig_time()		# a mapping of variables to a mapping of pairs of states to times
 
-        # define weights (see cmp_res() method)	TODO: Use these
+        # define weights (see score() method)
         self.weights = Bunch.Bunch(w_rank=0.3, w_delay=0.2,
                                    w_slew=0.2, w_priority=0.1,
                                    w_filterchange = 0.3)
@@ -83,9 +84,27 @@ class Scheduler(Callback.Callbacks):
         self.schedule_recs = info
 
 
+    def score(tb, ob):
+	# calculates a score for an OB thar represents how well it would fit here
+	# Remember: Lower numbers are better
+        score = 0	#TODO: figure out what components says
+        score += ob.priority*self.weights.w_priority	# the marked priority
+        score += ob.program.rank*self.weights.w_rank	# the rank of the program
+        if tb is not None:
+            score += tb.components.get('slew', 0*u.second).value*self.weights.w_slew	# the time to slew
+            score += tb.components.get('filter', 0*u.second).value*self.weights.w_filterchange	# the time to change filter
+            score += tb.components.get('delay', 0*u.second).value*self.weights.w_delay	# any additional delay
+        
+        return score
+
+
     def schedule_all(self):
 	""" call the main scheduling algorithm and deduce stats about the new schedule
 	"""
+        if self.schedule_recs is None:
+            self.logger.error("Information has not been loaded yet")
+            return
+
 	# Get ready to time yourself
         t_t1 = time.time()
         
@@ -97,7 +116,7 @@ class Scheduler(Callback.Callbacks):
         num_days = (end_time.to_datetime()-start_time.to_datetime()).days + 1
 	
 	# do some final assignments
-        self.logger.info("scheduling %d OBs (from %d programs) for %d nights" % (
+        self.logger.info("Scheduling %d OBs (from %d programs) for %d nights" % (
             len(self.oblist), len(self.programs), num_days))
         self.transitioner = astroplan.Transitioner(self.slew_rate, self.inst_reconfig_times)
         self.constraints = [astroplan.AtNightConstraint()]
@@ -106,7 +125,7 @@ class Scheduler(Callback.Callbacks):
         blk_lsts = self(start_time, end_time)
         self.schedule = blk_lsts[0]
         self.unscheduled_obs = blk_lsts[1]
-        self.logger.info("schedule generated in %.2f sec" % (time.time() - t_t1))
+        self.logger.info("Schedule generated in %.2f sec" % (time.time() - t_t1))
 
         # build a lookup table of programs -> OBs
         props = {}
@@ -130,15 +149,15 @@ class Scheduler(Callback.Callbacks):
             total_ob_time += obtime_no_overhead
 
         # Note oversubscribed time
-        self.logger.info("total program time=%d  total ob time=%d" % (
+        self.logger.info("Total program time=%d  total ob time=%d" % (
             total_program_time, total_ob_time))
         diff = total_ob_time - total_program_time
         if diff > 0:
             hrs = float(diff) / 3600.0
-            self.logger.info("oversubscribed by %.2f hours" % (hrs))
+            self.logger.info("Oversubscribed by %.2f hours" % (hrs))
         elif diff < 0:
             hrs = float(-diff) / 3600.0
-            self.logger.info("undersubscribed by %.2f hours" % (hrs))
+            self.logger.info("Undersubscribed by %.2f hours" % (hrs))
 
         # check time
         t_elapsed = time.time() - t_t1
@@ -177,7 +196,7 @@ class Scheduler(Callback.Callbacks):
 	# print out the completed programs
         out_f.write("Completed programs\n")
         for bnch in completed:
-            out_f.write("%-12.12s   %5.2f  %d/%d  100%%\n" % (
+            out_f.write("%-12.12s   %5.2f  %03d/%03d  100%%\n" % (
                 str(bnch.pgm), bnch.pgm.rank,
                 bnch.obcount, bnch.obcount))
         out_f.write("\n")
@@ -197,7 +216,7 @@ class Scheduler(Callback.Callbacks):
             pct = float(bnch.obcount-len(bnch.obs)) / float(bnch.obcount) * 100.0
             uncompleted_s = "["+", ".join(map(lambda ob: ob.target.name, props[str(bnch.pgm)].obs))+"]"
 
-            out_f.write("%-12.12s   %5.2f  %d/%d  %5.2f%%  %-142.142s\n" % (
+            out_f.write("%-12.12s   %5.2f  %03d/%03d  %5.2f%%  %-150.150s\n" % (
                 str(bnch.pgm), bnch.pgm.rank,
                 bnch.obcount-len(bnch.obs), bnch.obcount, pct,
                 uncompleted_s))
@@ -241,7 +260,11 @@ class Scheduler(Callback.Callbacks):
 	    The OBs in the returned lists will not be copies, though, and the
 	    OBs that make it into the final schedule will be altered
         """
-	# start with definitions
+	# start by adjusting for timezone (in future versions of astroplan, this may be done for us)
+        start_time -= self.site.timezone.utcoffset(start_time.to_datetime()).total_seconds()*u.second
+        end_time -= self.site.timezone.utcoffset(end_time.to_datetime()).total_seconds()*u.second
+
+	# then do definitions
         final_blocks = []
         unschedulable = []
         remaining_blocks = list(self.oblist)
@@ -258,7 +281,7 @@ class Scheduler(Callback.Callbacks):
                                                         observer = self.site,
                                                         targets=[self.oblist[0]], times=times)
             # if any of the universal constraints come up false, skip this time
-            if not observable[0]:	#TODO Figure out what's up with the AtNightConstraint
+            if not observable[0]:
                 reason = 'day'
                 best_block_idx = None
             
@@ -270,6 +293,7 @@ class Scheduler(Callback.Callbacks):
                     # first calculate transition
                     if len(final_blocks) > 0 and type(final_blocks[-1]) == astroplan.ObservingBlock:
                         tb = self.transitioner(final_blocks[-1], ob, current_time, self.site)
+                        print "Transition from the last block: {}".format(tb.components)
                         transition_time = tb.duration
                     else:
                         tb = None
@@ -283,7 +307,7 @@ class Scheduler(Callback.Callbacks):
                                                                     observer=self.site,
                                                                     targets=[ob.target], times=times)
                         if observable[0]:
-                            block_scores.append(ob.priority)
+                            block_scores.append(score(tb, ob))
                         else:
                             block_scores.append(0)
 		    # if it would run over the end of the schedule, then assume it is unschedulable
@@ -294,7 +318,7 @@ class Scheduler(Callback.Callbacks):
                         continue
  
 	    	# now that all that's been calculated, pick the best block
-                best_block_idx = np.argmax(block_scores)
+                best_block_idx = np.argmin(block_scores)
         
 		# if the best block is unobservable, then it's not really the best, is it?
                 if block_scores[best_block_idx] == 0.:

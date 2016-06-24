@@ -66,7 +66,7 @@ class NightSumPlot(BaseSumPlot):
         # qplan/qexec.
         date_list = []
         for i, schedule in enumerate(list(reversed(schedules))):
-            if len(schedule <= 0):
+            if len(schedule) <= 0:
                 continue
             date_list.append(start_of(schedule).strftime('%Y-%m-%d'))
             y = [i]

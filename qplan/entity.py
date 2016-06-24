@@ -316,7 +316,7 @@ class EnvironmentConfiguration(object):
     def __init__(self, seeing=None, airmass=None, moon='any',
                  transparency=None, moon_sep=None, comment=''):
         super(EnvironmentConfiguration, self).__init__()
-        self.seeing = seeing			# ???
+        self.seeing = seeing			# TODO: incorporate seeing and transparency
         self.airmass = airmass			# maximum allowable air mass
         self.transparency = transparency	# minimum allowable air transparency
         self.moon_sep = moon_sep		# minimum allowable distance from moon
