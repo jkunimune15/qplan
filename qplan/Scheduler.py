@@ -45,7 +45,6 @@ class Scheduler(Callback.Callbacks):
         self.max_delay = 10.0*u.hour		# max wait for visibility
         self.min_delay = 30.0*u.minute		# min gap to try to place an OB
         self.max_filterchange = 35*u.minute  	# max filter exchange time
-        self.alt_limits = (15.0*u.degree, 89.0*u.degree)
 
 	# other telescope-related constants
         self.slew_rate = 0.5*u.degree/u.second	# rate of slew
@@ -101,20 +100,13 @@ class Scheduler(Callback.Callbacks):
         self.logger.info("scheduling %d OBs (from %d programs) for %d nights" % (
             len(self.oblist), len(self.programs), num_days))
         self.transitioner = astroplan.Transitioner(self.slew_rate, self.inst_reconfig_times)
-        self.constraints = [astroplan.AtNightConstraint(), astroplan.AltitudeConstraint(*self.alt_limits)]
+        self.constraints = [astroplan.AtNightConstraint()]
 
 	# call the algorithm
         blk_lsts = self(start_time, end_time)
         self.schedule = blk_lsts[0]
         self.unscheduled_obs = blk_lsts[1]
-        self.logger.info("schedule generated in %.2f sec" (t_elapsed))
-
-	#TODO: delete this
-        for ob in self.schedule:
-            try:
-                print ob.start_time,"%-12.12s"%ob.target.name,ob.end_time
-            except Exception:
-                print ob.start_time,"%-12.12s"%"Transition","I can't even"
+        self.logger.info("schedule generated in %.2f sec" % (time.time() - t_t1))
 
         # build a lookup table of programs -> OBs
         props = {}
@@ -156,7 +148,7 @@ class Scheduler(Callback.Callbacks):
         out_f = StringIO.StringIO()
         num_obs = len(self.oblist)
         if num_obs > 0:
-            pct = float(num_obs - len(unscheduled_obs)) / float(num_obs)
+            pct = float(num_obs - len(self.unscheduled_obs)) / float(num_obs)
         else:
             pct = 0.
         out_f.write("%5.2f %% of OBs scheduled\n" % (pct*100.0))
@@ -167,7 +159,7 @@ class Scheduler(Callback.Callbacks):
             bnch = props[key]
             for i in range(len(bnch.obs), 0, -1):
                 ob = bnch.obs[i-1]
-                if ob in unscheduled_obs:
+                if ob in self.unscheduled_obs:
                     if not bnch in uncompleted:
                         uncompleted.append(bnch)
                 else:
@@ -249,59 +241,76 @@ class Scheduler(Callback.Callbacks):
 	    The OBs in the returned lists will not be copies, though, and the
 	    OBs that make it into the final schedule will be altered
         """
-        # start by combining universal constraints with OB-specific constraints
-        for ob in self.oblist:
-            if ob.constraints is None:
-                ob._all_constraints = self.constraints
-            else:
-                ob._all_constraints = self.constraints + ob.constraints
-            ob._time_scale = u.Quantity([0*u.minute, ob.duration/2, ob.duration])
-        
-        # define the main variables and start scheduling
+	# start with definitions
         final_blocks = []
         unschedulable = []
         remaining_blocks = list(self.oblist)
         current_time = start_time
-        while len(remaining_blocks) > 0 and current_time < end_time:
-	    # score each potential ob based on how well it would fit here
-            block_transitions = []
-            block_scores = []
-            for ob in reversed(remaining_blocks):
-                # first calculate transition
-                if len(final_blocks) > 0 and type(final_blocks[-1]) == astroplan.ObservingBlock:
-                    tb = self.transitioner(final_blocks[-1], ob, current_time, self.site)
-                    transition_time = tb.duration
-                else:
-                    tb = None
-                    transition_time = 0*u.minute
-                block_transitions.append(tb)
-                
-		# now verify that it is observable during this time
-                times = current_time + transition_time + ob._time_scale
-                if times[-1] <= end_time:
-                    observable = astroplan.is_always_observable(ob._all_constraints, self.site,
-                                                                [ob.target], times)
-                    if observable[0]:
-                        block_scores.append(ob.priority)
-                    else:
-                        block_scores.append(0)
-		# if it would run over the end of the schedule, then assume it is unschedulable
-                else:
-                    unschedulable.append(ob)
-                    block_transitions.pop()
-                    remaining_blocks.remove(ob)
-                    continue
+        for b in remaining_blocks:
+            b._time_scale = u.Quantity([0*u.minute, b.duration/2, b.duration])
 
-	    # now that all that's been calculated, pick the best block
-            best_block_idx = np.argmax(block_scores)
+	# now go ahead and start scheduling
+        while len(remaining_blocks) > 0 and current_time < end_time:
+            # first, check the universal constraints
+            observable = True
+            times = [current_time, current_time+self.min_delay/2]
+            observable = astroplan.is_always_observable(constraints=self.constraints,
+                                                        observer = self.site,
+                                                        targets=[self.oblist[0]], times=times)
+            # if any of the universal constraints come up false, skip this time
+            if not observable[0]:	#TODO Figure out what's up with the AtNightConstraint
+                reason = 'day'
+                best_block_idx = None
+            
+            else:
+		# now score each potential ob based on how well it would fit here
+                block_transitions = []
+                block_scores = []
+                for ob in reversed(remaining_blocks):
+                    # first calculate transition
+                    if len(final_blocks) > 0 and type(final_blocks[-1]) == astroplan.ObservingBlock:
+                        tb = self.transitioner(final_blocks[-1], ob, current_time, self.site)
+                        transition_time = tb.duration
+                    else:
+                        tb = None
+                        transition_time = 0*u.minute
+                    block_transitions.append(tb)
+                
+		    # now verify that it is observable during this time
+                    times = current_time + transition_time + ob._time_scale
+                    if times[-1] <= end_time:
+                        observable = astroplan.is_always_observable(constraints=ob.constraints,
+                                                                    observer=self.site,
+                                                                    targets=[ob.target], times=times)
+                        if observable[0]:
+                            block_scores.append(ob.priority)
+                        else:
+                            block_scores.append(0)
+		    # if it would run over the end of the schedule, then assume it is unschedulable
+                    else:
+                        unschedulable.append(ob)
+                        block_transitions.pop()
+                        remaining_blocks.remove(ob)
+                        continue
+ 
+	    	# now that all that's been calculated, pick the best block
+                best_block_idx = np.argmax(block_scores)
         
-	    # if the best block is unobservable, then we obviously need a delay
-            if block_scores[best_block_idx] == 0.:
+		# if the best block is unobservable, then it's not really the best, is it?
+                if block_scores[best_block_idx] == 0.:
+                    reason = 'nothing_observable'
+                    best_block_idx = None
+
+	    # if there is no best block, we obviously need a delay
+            if best_block_idx == None:
                 self.logger.info("nothing observable at %s" % (current_time))
-                final_blocks.append(astroplan.TransitionBlock({'nothing_observable': self.min_delay}, current_time))
+                final_blocks.append(astroplan.TransitionBlock(components={reason: self.min_delay},
+                                                              start_time=current_time))
+                final_blocks[-1].components = {reason: self.min_delay}
                 current_time += self.min_delay
 	    # otherwise, go ahead and add it to the schedule; don't forget the TransitionBlock!
             else:
+                self.logger.info("scheduled OB at %s" % (current_time))
                 tb = block_transitions.pop(best_block_idx)
                 ob = remaining_blocks.pop(best_block_idx)
                 if tb is not None:
@@ -314,7 +323,7 @@ class Scheduler(Callback.Callbacks):
                 final_blocks.append(ob)
         
         # return the scheduled blocks and the unscheduled blocks
-        return [final_blocks, remaining_blocks+unschedulable]   
+        return [final_blocks, remaining_blocks+unschedulable]
 
 
 def eval_schedule(schedule):	# counts the number of filter changes and the wasted seconds
@@ -324,7 +333,7 @@ def eval_schedule(schedule):	# counts the number of filter changes and the waste
     time_waste_sec = 0.0
 
     for ob in schedule:
-        if type(ob).__name__ == "TransitionBlock" and ob.components['AtNightConstraint']:
+        if type(ob).__name__ == "TransitionBlock":
             delta = (ob.end_time-ob.start_time).to(u.second).value
             time_waste_sec += delta
 

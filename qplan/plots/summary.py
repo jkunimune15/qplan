@@ -66,6 +66,8 @@ class NightSumPlot(BaseSumPlot):
         # qplan/qexec.
         date_list = []
         for i, schedule in enumerate(list(reversed(schedules))):
+            if len(schedule <= 0):
+                continue
             date_list.append(start_of(schedule).strftime('%Y-%m-%d'))
             y = [i]
             previous_slot_right = np.array([0.0])
@@ -176,6 +178,8 @@ class ScheduleSumPlot(BaseSumPlot):
         sched_minutes = []
         unsched_minutes = []
         for schedule in schedules:
+            if len(schedule) <= 0:
+                continue
             date_list.append(start_of(schedule).strftime('%Y-%m-%d'))
             time_avail = length_of(schedule)
             time_avail_minutes = time_avail.total_seconds() / 60.0
@@ -186,13 +190,16 @@ class ScheduleSumPlot(BaseSumPlot):
         self.logger.debug('date_list %s' % date_list)
         self.logger.debug('sched_minutes %s' % sched_minutes)
         self.logger.debug('unsched_minutes %s' % unsched_minutes)
-        sched_bar = plt.bar(ind, sched_minutes, self.barWidth, color='g')
-        unsched_bar = plt.bar(ind, unsched_minutes, self.barWidth, color='darkred', bottom=sched_minutes)
-        plt.set_xticks(ind+self.barWidth/2.)
-        plt.set_xticklabels(date_list, rotation=45, ha='right')
-        plt.legend((unsched_bar, sched_bar), ('Delay+Unscheduled', 'Scheduled'), prop=self.legendFont)
-
-        self.draw()
+        try:
+            sched_bar = plt.bar(ind, sched_minutes, self.barWidth, color='g')
+            unsched_bar = plt.bar(ind, unsched_minutes, self.barWidth, color='darkred', bottom=sched_minutes)
+            plt.set_xticks(ind+self.barWidth/2.)
+            plt.set_xticklabels(date_list, rotation=45, ha='right')
+            plt.legend((unsched_bar, sched_bar), ('Delay+Unscheduled', 'Scheduled'), prop=self.legendFont)
+ 
+            self.draw()
+        except Exception:
+            self.logger.error('could not produce bar chart due to lack of data')
 
 class SemesterSumPlot(BaseSumPlot):
     # Makes a pie chart to show percentage of available time allocated
@@ -262,7 +269,7 @@ def each_night(schedule):	# breaks schedule up into several schedules, separated
     schedules = []		# schedules: a list of lists of obs, each inner list being a night
     night_start = 0
     for i, block in enumerate(schedule):		# parse through the schedule
-        if type(block).__name__ == "TransitionBlock" and block.components["AtNightConstraint"]:	# if there is a (day) transitionblock at i
+        if type(block).__name__ == "TransitionBlock" and 'day' in block.components.keys():	# if there is a (day) transitionblock at i
             if night_start < i:					# split the list,
                 schedules.append(schedule[night_start:i])	# add the piece to schedules
             night_start = i+1					# and move on
