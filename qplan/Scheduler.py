@@ -17,6 +17,9 @@ import astroplan
 import astropy.units as u
 import astropy.time as aptime
 
+# local imports
+import qsim
+
 # maximum rank for a program
 max_rank = 10.0
 
@@ -47,15 +50,6 @@ class Scheduler(Callback.Callbacks):
         self.min_delay = 30.0*u.minute		# min gap to try to place an OB
         self.max_filterchange = 35*u.minute  	# max filter exchange time
 
-	# other telescope-related constants
-        self.slew_rate = 0.5*u.degree/u.second	# rate of slew
-        self.inst_reconfig_times = calc_reconfig_time()		# a mapping of variables to a mapping of pairs of states to times
-
-        # define weights (see score() method)
-        self.weights = Bunch.Bunch(w_rank=0.3, w_delay=0.2,
-                                   w_slew=0.2, w_priority=0.1,
-                                   w_filterchange = 0.3)
-
         # For callbacks
         for name in ('schedule-cleared', 'schedule-added', 'schedule-completed',):
             self.enable_callback(name)
@@ -84,18 +78,14 @@ class Scheduler(Callback.Callbacks):
         self.schedule_recs = info
 
 
-    def score(tb, ob):
-	# calculates a score for an OB thar represents how well it would fit here
-	# Remember: Lower numbers are better
-        score = 0	#TODO: figure out what components says
-        score += ob.priority*self.weights.w_priority	# the marked priority
-        score += ob.program.rank*self.weights.w_rank	# the rank of the program
-        if tb is not None:
-            score += tb.components.get('slew', 0*u.second).value*self.weights.w_slew	# the time to slew
-            score += tb.components.get('filter', 0*u.second).value*self.weights.w_filterchange	# the time to change filter
-            score += tb.components.get('delay', 0*u.second).value*self.weights.w_delay	# any additional delay
-        
-        return score
+    def toUTC(self, localTime):	# converts an astropy.time.Time object from local to UTC time
+        return localTime-self.site.timezone.utcoffset(localTime.to_datetime()).total_seconds()*u.second
+
+    def fromUTC(self, utcTime):	# converts an astropy.time.Time object from UTC to local time
+        return utcTime+self.site.timezone.utcoffset(utcTime.to_datetime()).total_seconds()*u.second
+
+
+
 
 
     def schedule_all(self):
@@ -118,7 +108,6 @@ class Scheduler(Callback.Callbacks):
 	# do some final assignments
         self.logger.info("Scheduling %d OBs (from %d programs) for %d nights" % (
             len(self.oblist), len(self.programs), num_days))
-        self.transitioner = astroplan.Transitioner(self.slew_rate, self.inst_reconfig_times)
         self.constraints = [astroplan.AtNightConstraint()]
 
 	# call the algorithm
@@ -261,14 +250,14 @@ class Scheduler(Callback.Callbacks):
 	    OBs that make it into the final schedule will be altered
         """
 	# start by adjusting for timezone (in future versions of astroplan, this may be done for us)
-        start_time -= self.site.timezone.utcoffset(start_time.to_datetime()).total_seconds()*u.second
-        end_time -= self.site.timezone.utcoffset(end_time.to_datetime()).total_seconds()*u.second
+        start_time = self.toUTC(start_time)
+        end_time = self.toUTC(end_time)
 
 	# then do definitions
         final_blocks = []
         unschedulable = []
         remaining_blocks = list(self.oblist)
-        current_time = start_time
+        current_time = start_time + 5.5*u.hour
         for b in remaining_blocks:
             b._time_scale = u.Quantity([0*u.minute, b.duration/2, b.duration])
 
@@ -292,8 +281,7 @@ class Scheduler(Callback.Callbacks):
                 for ob in reversed(remaining_blocks):
                     # first calculate transition
                     if len(final_blocks) > 0 and type(final_blocks[-1]) == astroplan.ObservingBlock:
-                        tb = self.transitioner(final_blocks[-1], ob, current_time, self.site)
-                        print "Transition from the last block: {}".format(tb.components)
+                        tb = qsim.transition(final_blocks[-1], ob, current_time, self.site)
                         transition_time = tb.duration
                     else:
                         tb = None
@@ -303,13 +291,14 @@ class Scheduler(Callback.Callbacks):
 		    # now verify that it is observable during this time
                     times = current_time + transition_time + ob._time_scale
                     if times[-1] <= end_time:
-                        observable = astroplan.is_always_observable(constraints=ob.constraints,
+                        """observable = astroplan.is_always_observable(constraints=ob.constraints,
                                                                     observer=self.site,
                                                                     targets=[ob.target], times=times)
                         if observable[0]:
-                            block_scores.append(score(tb, ob))
+                            block_scores.append(qsim.score(tb, ob))
                         else:
-                            block_scores.append(0)
+                            block_scores.append(float('inf'))"""
+                        block_scores.append(qsim.const_score(tb, ob, times, self.site))
 		    # if it would run over the end of the schedule, then assume it is unschedulable
                     else:
                         unschedulable.append(ob)
@@ -321,20 +310,20 @@ class Scheduler(Callback.Callbacks):
                 best_block_idx = np.argmin(block_scores)
         
 		# if the best block is unobservable, then it's not really the best, is it?
-                if block_scores[best_block_idx] == 0.:
+                if block_scores[best_block_idx] == float('inf'):
                     reason = 'nothing_observable'
                     best_block_idx = None
 
 	    # if there is no best block, we obviously need a delay
             if best_block_idx == None:
-                self.logger.info("nothing observable at %s" % (current_time))
+                self.logger.info("Nothing observable at %s" % (self.fromUTC(current_time)))
                 final_blocks.append(astroplan.TransitionBlock(components={reason: self.min_delay},
                                                               start_time=current_time))
                 final_blocks[-1].components = {reason: self.min_delay}
                 current_time += self.min_delay
 	    # otherwise, go ahead and add it to the schedule; don't forget the TransitionBlock!
             else:
-                self.logger.info("scheduled OB at %s" % (current_time))
+                self.logger.info("Scheduled OB at %s" % (self.fromUTC(current_time)))
                 tb = block_transitions.pop(best_block_idx)
                 ob = remaining_blocks.pop(best_block_idx)
                 if tb is not None:
@@ -348,38 +337,5 @@ class Scheduler(Callback.Callbacks):
         
         # return the scheduled blocks and the unscheduled blocks
         return [final_blocks, remaining_blocks+unschedulable]
-
-
-def eval_schedule(schedule):	# counts the number of filter changes and the wasted seconds
-
-    current_filter = None
-    num_filter_exchanges = 0
-    time_waste_sec = 0.0
-
-    for ob in schedule:
-        if type(ob).__name__ == "TransitionBlock":
-            delta = (ob.end_time-ob.start_time).to(u.second).value
-            time_waste_sec += delta
-
-        elif ((ob.settings['filter'] != None) and
-            (ob.settings['filter'] != current_filter)):
-            num_filter_exchanges += 1
-            current_filter = ob.settings['filter']
-
-    res = Bunch.Bunch(num_filter_exchanges=num_filter_exchanges,
-                      time_waste_sec=time_waste_sec)
-    return res
-
-
-def calc_reconfig_time():	# builds a nested dictionary of reconfiguration times
-    output = {'filter':{}}
-    list_of_filters = ['g','r','i','z','Y','SH','nb656','nb515',None]
-    for filter1 in list_of_filters:
-        for filter2 in list_of_filters:
-            if filter1 == filter2:
-                output['filter'][(filter1, filter2)] = 0*u.hour
-            else:
-                output['filter'][(filter1, filter2)] = 1*u.hour
-    return output
 
 # END

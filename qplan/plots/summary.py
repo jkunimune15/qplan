@@ -13,7 +13,7 @@ from ginga.misc import Bunch
 
 import astropy.units as u
 
-from Scheduler import eval_schedule
+from qsim import eval_schedule
 
 class BaseSumPlot(plots.Plot):
     def __init__(self, width, height, logger=None):

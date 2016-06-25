@@ -16,7 +16,7 @@ from ginga.misc import Bunch
 
 import HSC
 
-from Scheduler import eval_schedule
+from qsim import eval_schedule
 
 
 class Report(PlBase.Plugin):

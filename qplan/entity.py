@@ -42,7 +42,7 @@ from ginga.misc import Bunch
 # being < 25% illumination
 dark_moon_lim = 0.25
 
-alt_limits = (15.0*u.degree, 89.0*u.degree)
+min_el, max_el = (15.0*u.degree, 89.0*u.degree)
 
 
 class Program(PersistentEntity):
@@ -348,9 +348,9 @@ class EnvironmentConfiguration(object):
     
     def get_constraints(self):	# return a list of Constraints representing this cfg
         output = []
-        output.append(apn.AirmassConstraint(self.airmass))
         output.append(apn.MoonSeparationConstraint(self.moon_sep))
-        output.append(apn.AltitudeConstraint(*alt_limits))
+        am_alt_lim = math.asin(1.0/self.airmass)*u.rad	# the min alt defined by airmass
+        output.append(apn.AltitudeConstraint(max(min_el,am_alt_lim), max_el))
         if self.moon == 'dark':
             output.append(custom.MoonIlluminationConstraint(min=0., max=dark_moon_lim))
         else:
@@ -359,4 +359,3 @@ class EnvironmentConfiguration(object):
         return output
 
 #END
-

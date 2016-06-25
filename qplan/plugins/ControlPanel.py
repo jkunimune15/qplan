@@ -237,7 +237,7 @@ class ControlPanel(PlBase.Plugin):
         except Exception as e:
             self.logger.error("Error storing into scheduler: %s" % (str(e)))
 
-        self.logger.info("scheduler initialized")
+        self.logger.info("Scheduler initialized")
 
     def build_schedule_cb(self, widget):
         # update the model with any changes from GUI
