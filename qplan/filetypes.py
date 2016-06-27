@@ -20,6 +20,8 @@ import astroplan
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
+import time
+
 moon_states = ('dark', 'gray', 'dark+gray')
 moon_states_upper = [state.upper() for state in moon_states]
 moon_sep_dist_warn = 30.0

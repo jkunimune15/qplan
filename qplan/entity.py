@@ -350,7 +350,7 @@ class EnvironmentConfiguration(object):
         output = []
         output.append(apn.MoonSeparationConstraint(self.moon_sep))
         am_alt_lim = math.asin(1.0/self.airmass)*u.rad	# the min alt defined by airmass
-        output.append(apn.AltitudeConstraint(max(min_el,am_alt_lim), max_el))
+        output.append(apn.AltitudeConstraint(min=am_alt_lim))
         if self.moon == 'dark':
             output.append(custom.MoonIlluminationConstraint(min=0., max=dark_moon_lim))
         else:

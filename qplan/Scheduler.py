@@ -10,6 +10,7 @@ from datetime import timedelta
 import pytz
 import numpy as np
 import StringIO
+import time
 
 # 3rd party imports
 from ginga.misc import Callback, Bunch
@@ -108,7 +109,7 @@ class Scheduler(Callback.Callbacks):
 	# do some final assignments
         self.logger.info("Scheduling %d OBs (from %d programs) for %d nights" % (
             len(self.oblist), len(self.programs), num_days))
-        self.constraints = [astroplan.AtNightConstraint()]
+        self.constraints = [astroplan.AtNightConstraint(), astroplan.AltitudeConstraint(15*u.degree, 85*u.degree)]
 
 	# call the algorithm
         blk_lsts = self(start_time, end_time)
@@ -261,14 +262,24 @@ class Scheduler(Callback.Callbacks):
         for b in remaining_blocks:
             b._time_scale = u.Quantity([0*u.minute, b.duration/2, b.duration])
 
+	# let's test something.
+        targets = [ob.target for ob in self.oblist]
+        times = astroplan.time_grid_from_range(aptime.Time([start_time,end_time]), self.min_delay)
+        matrix = np.ones((len(targets), len(times)), dtype=np.bool)
+        t = time.time()
+        for constraint in self.constraints:
+            matrix = np.logical_and(matrix, constraint(self.site, targets, times))
+        print time.time()-t
+        print matrix
+
 	# now go ahead and start scheduling
         while len(remaining_blocks) > 0 and current_time < end_time:
             # first, check the universal constraints
-            observable = True
-            times = [current_time, current_time+self.min_delay/2]
-            observable = astroplan.is_always_observable(constraints=self.constraints,
-                                                        observer = self.site,
-                                                        targets=[self.oblist[0]], times=times)
+            observable = [True]
+            #times = [current_time, current_time+self.min_delay/2]
+            #observable = astroplan.is_always_observable(constraints=self.constraints,
+            #                                            observer = self.site,
+            #                                            targets=[self.oblist[0]], times=times)
             # if any of the universal constraints come up false, skip this time
             if not observable[0]:
                 reason = 'day'
@@ -278,7 +289,7 @@ class Scheduler(Callback.Callbacks):
 		# now score each potential ob based on how well it would fit here
                 block_transitions = []
                 block_scores = []
-                for ob in reversed(remaining_blocks):
+                for i, ob in enumerate(remaining_blocks):
                     # first calculate transition
                     if len(final_blocks) > 0 and type(final_blocks[-1]) == astroplan.ObservingBlock:
                         tb = qsim.transition(final_blocks[-1], ob, current_time, self.site)
@@ -290,21 +301,20 @@ class Scheduler(Callback.Callbacks):
                 
 		    # now verify that it is observable during this time
                     times = current_time + transition_time + ob._time_scale
-                    if times[-1] <= end_time:
-                        """observable = astroplan.is_always_observable(constraints=ob.constraints,
+                    if not matrix[i, int((current_time-end_time)/(self.min_delay))]:
+                        observable = [False]
+                    elif times[-1] > end_time:
+                        observable = [False]
+                    else:
+                        observable = astroplan.is_always_observable(constraints=ob.constraints,
                                                                     observer=self.site,
                                                                     targets=[ob.target], times=times)
-                        if observable[0]:
-                            block_scores.append(qsim.score(tb, ob))
-                        else:
-                            block_scores.append(float('inf'))"""
-                        block_scores.append(qsim.const_score(tb, ob, times, self.site))
-		    # if it would run over the end of the schedule, then assume it is unschedulable
+                    if observable[0]:
+                        block_scores.append(qsim.score(tb, ob))
                     else:
-                        unschedulable.append(ob)
-                        block_transitions.pop()
-                        remaining_blocks.remove(ob)
-                        continue
+                        block_scores.append(float('inf'))
+                        #block_scores.append(qsim.const_score(tb, ob, times, self.site))
+		    # if it would run over the end of the schedule, then assume it is unschedulable
  
 	    	# now that all that's been calculated, pick the best block
                 best_block_idx = np.argmin(block_scores)
