@@ -1041,17 +1041,20 @@ class TgtCfgFile(QueueFile):
 
                 rec = self.parse_row(row, self.columnNames,
                                      self.column_map)	# get the information from the row
-
-		# convert ra and dec columns to SkyCoords
+                
+                t0 = time.time()
+		        # convert ra and dec columns to SkyCoords
                 coords = SkyCoord(ra=rec.ra, dec=rec.dec, unit=u.deg, equinox=rec.eq)
                 try:
                     sdss_coords = SkyCoord(ra=rec.sdss_ra, dec=rec.sdss_dec, unit=u.deg, equinox=rec.eq)
                 except ValueError:
                     sdss_coords = None
-		# if sdss_ra and sdss_dec are blank, leave that SkyCoord as None
+		        # if sdss_ra and sdss_dec are blank, leave that SkyCoord as None
 		
-		# create a new FixedTarget
+		        # create a new FixedTarget
                 target = astroplan.FixedTarget(name=rec.name, coord=coords, sdss=sdss_coords)
+                dt = time.time()-t0
+                print "Initializing a SkyCoord and a FixedTarget took {} ms".format(dt)
                 code = rec.code.strip()
 
                 # update existing old record if it exists
@@ -1517,7 +1520,7 @@ class OBListFile(QueueFile):
                     priority = float(rec.priority)
                 if priority > max_prio:	# keep track of the largest prio we've seen yet
                     max_prio = priority
-		# build configuration and constraints structures, as well as settings for extra info
+		        # build configuration and constraints structures, as well as settings for extra info
                 settings = {}
                 settings.update(telcfg.get_cfg_info())
                 settings.update(inscfg.get_cfg_info())
@@ -1525,11 +1528,14 @@ class OBListFile(QueueFile):
                 constraints = envcfg.get_constraints()
 
                 # make the OB
+                t0 = time.time()
                 ob = astroplan.ObservingBlock(target=tgtcfg,
                                               duration=float(rec.total_time)*u.second,
                                               priority=priority,
                                               configuration=configuration,
                                               constraints=constraints)
+                dt = time.time()-t0
+                print "Initializing an ObservingBlock took {} ms".format(dt)
                 ob.program = program	# make sure it knows what program it's a part of
                 ob.settings = settings	# and throw in any other information, like stop and focus
                 

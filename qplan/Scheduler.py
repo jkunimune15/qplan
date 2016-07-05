@@ -266,11 +266,11 @@ class Scheduler(Callback.Callbacks):
         targets = [ob.target for ob in self.oblist]
         times = astroplan.time_grid_from_range(aptime.Time([start_time,end_time]), self.min_delay)
         matrix = np.ones((len(targets), len(times)), dtype=np.bool)
-        t = time.time()
         for constraint in self.constraints:
+            t0 = time.time()
             matrix = np.logical_and(matrix, constraint(self.site, targets, times))
-        print time.time()-t
-        print matrix
+            dt = time.time()-t0
+            print "Calling a constraint for {} targets and {} times took {} ms".format(len(targets),len(times),dt)
 
 	# now go ahead and start scheduling
         while len(remaining_blocks) > 0 and current_time < end_time:
@@ -306,9 +306,12 @@ class Scheduler(Callback.Callbacks):
                     elif times[-1] > end_time:
                         observable = [False]
                     else:
+                        t0 = time.time()
                         observable = astroplan.is_always_observable(constraints=ob.constraints,
                                                                     observer=self.site,
                                                                     targets=[ob.target], times=times)
+                        dt = time.time()-t0
+                        print "is_always_observable for {} constraints and {} times took {} ms".format(len(ob.constraints,len(times),dt)
                     if observable[0]:
                         block_scores.append(qsim.score(tb, ob))
                     else:
