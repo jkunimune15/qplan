@@ -311,7 +311,7 @@ class Scheduler(Callback.Callbacks):
                                                                     observer=self.site,
                                                                     targets=[ob.target], times=times)
                         dt = time.time()-t0
-                        print "is_always_observable for {} constraints and {} times took {} ms".format(len(ob.constraints,len(times),dt)
+                        print "is_always_observable for {} constraints and {} times took {} ms".format(len(ob.constraints),len(times),dt)
                     if observable[0]:
                         block_scores.append(qsim.score(tb, ob))
                     else:
